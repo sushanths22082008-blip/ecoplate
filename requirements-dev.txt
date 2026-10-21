@@ -1,0 +1,4 @@
+# Only needed for the OPTIONAL real-browser test (tests/test_browser.py).
+# The normal test suite (python -m unittest discover -s tests -v) needs nothing beyond requirements.txt.
+-r requirements.txt
+playwright>=1.40

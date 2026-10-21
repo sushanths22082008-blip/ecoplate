@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+ecoplate.db
+ecoplate.db-wal
+ecoplate.db-shm
+.env
+.env.*
+!.env.example
+instance/
