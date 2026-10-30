@@ -13,4 +13,4 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Send request to EcoPlate
-        run: curl -fsS --max-time 30 https://ecoplate-b1vr.onrender.com/ -o /dev/null
+        run: curl -fsS --max-time 90 https://ecoplate-b1vr.onrender.com/ -o /dev/null
