@@ -1,0 +1,13 @@
+name: EcoPlate Keep Alive
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send request to EcoPlate
+        run: curl -fsS --max-time 30 https://ecoplate-b1vr.onrender.com/ -o /dev/null
