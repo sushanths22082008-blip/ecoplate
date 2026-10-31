@@ -16,6 +16,7 @@ import re
 import socket
 import sqlite3
 import sys
+import threading
 from datetime import date, datetime, timedelta, timezone
 
 from flask import Flask, g, jsonify, request, send_from_directory
@@ -447,6 +448,32 @@ def create_app(db_path=None):
     return app
 
 
+class _LazyWsgiApp:
+    """Create the Flask app only when a WSGI server first handles a request.
+
+    Gunicorn imports ``app:app``. Deferring create_app() keeps module import
+    lightweight and ensures the database/schema are initialized on first use.
+    The lock prevents concurrent first requests from creating multiple apps.
+    """
+    def __init__(self):
+        self._real = None
+        self._lock = threading.Lock()
+
+    def get(self):
+        if self._real is None:
+            with self._lock:
+                if self._real is None:
+                    self._real = create_app()
+        return self._real
+
+    def __call__(self, environ, start_response):
+        return self.get()(environ, start_response)
+
+
+# Gunicorn production entry point: ``gunicorn app:app ...``
+app = _LazyWsgiApp()
+
+
 # ----------------------------------------------------------------------------- launcher
 def _free_port(host, start):
     for port in range(start, start + 20):
@@ -479,3 +506,4 @@ if __name__ == "__main__":
         import webbrowser
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()
     application.run(host=host, port=port, debug=False, threaded=True)
+
