@@ -8,3 +8,7 @@ ecoplate.db-shm
 .env.*
 !.env.example
 instance/
+*.bak
+*.db-journal
+shots/
+.pytest_cache/

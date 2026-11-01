@@ -68,6 +68,14 @@ def main():
         def tab(name):
             page.click(f'#tabs button[data-tab="{name}"]')
 
+        def wait_forecast():
+            # wait for the forecast to be drawn (training takes a moment) instead of sleeping a fixed time
+            for _ in range(300):                     # up to ~30 s; polling avoids string-eval (blocked by the CSP)
+                if "Checking the model" not in page.inner_text("#fcResult"):
+                    break
+                page.wait_for_timeout(100)
+            page.wait_for_timeout(100)
+
         def settle():
             page.wait_for_load_state("networkidle")
             page.wait_for_timeout(250)
@@ -103,7 +111,7 @@ def main():
         # ---------- 3. forecast with 1 record: labelled fallback ----------
         tab("forecast")
         page.fill("#fcDate", date.today().isoformat())
-        page.click('#fcForm button[type="submit"]'); settle()
+        page.click('#fcForm button[type="submit"]'); wait_forecast()
         txt = page.inner_text("#fcResult")
         check("tiny history -> rule-based fallback is clearly labelled", "NOT machine learning" in txt and "ACTIVE" not in txt, txt[:300])
         check("fallback shows predicted-surplus warning (not safe for donation)", "not</b> verified" in page.inner_html("#fcResult") or "not verified" in txt.lower(), txt[-400:])
@@ -133,7 +141,7 @@ def main():
         page.select_option("#fcMeal", "Lunch")
         nxt = (date.fromisoformat(max(r["date"] for r in fx)) + timedelta(days=1)).isoformat()
         page.fill("#fcDate", nxt)
-        page.click('#fcForm button[type="submit"]'); settle()
+        page.click('#fcForm button[type="submit"]'); wait_forecast()
         txt = page.inner_text("#fcResult")
         check("UI says Gradient Boosting is ACTIVE", "Gradient Boosting is ACTIVE" in txt, txt[:300])
         check("UI shows MAE and RMSE", "MAE" in txt and "RMSE" in txt)
@@ -176,7 +184,7 @@ def main():
         tab("forecast")
         nxt2 = (date.fromisoformat(max(r["date"] for r in noise)) + timedelta(days=1)).isoformat()
         page.fill("#fcDate", nxt2)
-        page.click('#fcForm button[type="submit"]'); settle()
+        page.click('#fcForm button[type="submit"]'); wait_forecast()
         txt = page.inner_text("#fcResult")
         check("UI says trained but NOT used, and method is rule-based", "trained but NOT used" in txt and "NOT machine learning" in txt and "ACTIVE" not in txt, txt[:400])
 
@@ -227,9 +235,10 @@ def main():
         page.fill("#sItem", "Veg biryani"); page.fill("#sQty", "12"); page.fill("#sLoc", "Back door")
         page.click('#sForm button[type="submit"]')
         check("surplus needs the food-safety confirmation", "confirm that the food is safe" in page.inner_text("#sMsg"), page.inner_text("#sMsg"))
-        page.check("#sSafe"); page.click('#sForm button[type="submit"]')
+        # The surplus register is now stored on the server, so each action is a network round-trip: wait for it.
+        page.check("#sSafe"); page.click('#sForm button[type="submit"]'); settle()
         check("surplus entry added", "Veg biryani" in page.inner_text("#sBody"))
-        page.locator("#sBody tr", has_text="Veg biryani").locator('button[data-act="collect"]').click()
+        page.locator("#sBody tr", has_text="Veg biryani").locator('button[data-act="collect"]').click(); settle()
         check("mark collected works", "Collected" in page.locator("#sBody tr", has_text="Veg biryani").inner_text())
         page.reload(); settle(); tab("surplus")
         check("surplus register persists after reload", "Veg biryani" in page.inner_text("#sBody") and "Collected" in page.locator("#sBody tr", has_text="Veg biryani").inner_text())
@@ -275,7 +284,7 @@ def main():
         samples = [r for r in srv.api("/api/records")["records"] if r["synthetic"]]
         check("sample button loads flagged synthetic records", len(samples) > 200 and all(r["source"] == "sample" for r in samples), len(samples))
         tab("forecast"); page.fill("#fcDate", date.today().isoformat())
-        page.click('#fcForm button[type="submit"]'); settle()
+        page.click('#fcForm button[type="submit"]'); wait_forecast()
         txt = page.inner_text("#fcResult")
         labelled = ("Gradient Boosting is ACTIVE" in txt and "trained ML model" in txt) or \
                    ("NOT machine learning" in txt and "ACTIVE" not in txt)

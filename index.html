@@ -80,7 +80,34 @@ footer{text-align:center;color:var(--mu);font-size:.8rem;padding:20px 16px}
 td.n,th.n{text-align:right}
 .kvs{display:grid;gap:4px 18px;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));font-size:.9rem;margin:6px 0}
 .syn{display:inline-block;background:var(--ambl);color:var(--amb);border-radius:99px;padding:0 8px;font-size:.72rem;font-weight:700;margin-left:4px}
-@media(max-width:600px){header h1{font-size:1.3rem}.big{font-size:1.8rem}main{padding:10px}}
+.src{display:inline-block;border-radius:6px;padding:1px 8px;font-size:.76rem;font-weight:700;margin-right:6px;white-space:nowrap}
+.src.obs{background:var(--gl);color:var(--gd)}
+.src.fc{background:var(--bluel);color:var(--blue)}
+.src.ai{background:#efe9fb;color:#5a3c9a}
+.src.hyp{background:var(--ambl);color:var(--amb)}
+.src.act{background:#eef2f0;color:var(--tx)}
+.ins{border:1px solid var(--bd);border-left:5px solid var(--bd);border-radius:10px;padding:12px 14px;margin:10px 0;background:#fff}
+.ins.sev-attention{border-left-color:var(--amb)}
+.ins.sev-good{border-left-color:var(--g)}
+.ins.sev-info{border-left-color:var(--blue)}
+.ins h3{margin:0 0 6px}
+.ins p{margin:6px 0}
+.ins ul{margin:4px 0 4px 18px;padding:0}
+.chat{display:flex;flex-direction:column;gap:10px;margin:12px 0}
+.bubble{border-radius:12px;padding:10px 14px;max-width:100%}
+.bubble.q{background:var(--gl);align-self:flex-end;max-width:85%}
+.bubble.a{background:#fff;border:1px solid var(--bd)}
+.ans{white-space:pre-wrap}
+textarea{width:100%;padding:9px 10px;border:1px solid #bccbc2;border-radius:8px;font-size:1rem;font-family:inherit;min-height:70px}
+textarea:focus{outline:3px solid #9fd4b6;outline-offset:1px}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
+.flag{border:1px solid var(--bd);border-radius:10px;padding:12px 14px;margin:10px 0;background:#fff}
+.flag.reviewed{opacity:.8;background:#f8fbf9}
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.spin{display:inline-block;width:14px;height:14px;border:2px solid #9fd4b6;border-top-color:var(--gd);border-radius:50%;animation:sp .8s linear infinite;vertical-align:-2px;margin-right:6px}
+@keyframes sp{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.spin{animation:none}}
+@media(max-width:600px){header h1{font-size:1.3rem}.big{font-size:1.8rem}main{padding:10px}.bubble.q{max-width:100%}}
 </style>
 </head>
 <body>
@@ -93,16 +120,31 @@ td.n,th.n{text-align:right}
 <nav id="tabs">
   <button data-tab="dashboard" class="active">📊 Dashboard</button>
   <button data-tab="forecast">🔮 Forecast</button>
+  <button data-tab="insights">🔎 Insights</button>
+  <button data-tab="alerts">🚩 Alerts</button>
+  <button data-tab="assistant">💬 Assistant</button>
   <button data-tab="model">🧠 Model</button>
   <button data-tab="record">📝 Record Meal</button>
   <button data-tab="import">📥 Bulk Import</button>
   <button data-tab="history">📚 History</button>
   <button data-tab="surplus">🤝 Surplus Sharing</button>
   <button data-tab="data">💾 Backup &amp; Reset</button>
+  <button id="btnLogout" type="button" style="display:none;margin-left:auto">Log out</button>
 </nav>
 
 <main>
 <div id="notice"></div>
+
+<div class="card" id="loginCard" style="display:none" role="region" aria-label="Log in">
+  <h2>Log in</h2>
+  <p class="muted">This EcoPlate server asks for an access code. Ask the canteen administrator if you do not have it.</p>
+  <form id="loginForm" novalidate>
+    <label for="loginCode">Access code</label>
+    <input type="password" id="loginCode" autocomplete="current-password" maxlength="200">
+    <div class="btns"><button class="btn" type="submit">Log in</button></div>
+  </form>
+  <div id="loginMsg" class="msg" role="alert"></div>
+</div>
 
 <!-- DASHBOARD -->
 <section class="panel active" id="tab-dashboard">
@@ -118,6 +160,7 @@ td.n,th.n{text-align:right}
     <p class="muted" id="sRange"></p>
   </div>
   <div class="card" id="dashModel"><h2>Forecast model</h2><p class="muted">Checking the model…</p></div>
+  <div class="card" id="dashAttention"><h2>Needs attention</h2><p class="muted">Checking the records…</p></div>
   <div class="grid two">
     <div class="card"><h2>Waste overview by meal</h2><div id="chartMeal"></div></div>
     <div class="card"><h2>Leftovers: last 14 recorded days</h2><div id="chartTrend"></div></div>
@@ -140,7 +183,67 @@ td.n,th.n{text-align:right}
       </div>
       <button class="btn" type="submit">Calculate recommendation</button>
     </form>
-    <div id="fcResult"></div>
+    <div id="fcResult" aria-live="polite"></div>
+  </div>
+  <div class="card">
+    <h2>Calendar notes (holidays, exams, events)</h2>
+    <p class="muted">Optional. Mark days that were special. EcoPlate shows how earlier days with the same note compared, <b>as context only</b>: a note never changes the forecast number. Use the attendance field for that.</p>
+    <form id="cxForm" novalidate>
+      <div class="row">
+        <div><label for="cxDate">Date</label><input type="date" id="cxDate"></div>
+        <div><label for="cxKind">Kind</label><select id="cxKind"><option value="holiday">Holiday</option><option value="exam">Exam period</option><option value="event">Event</option><option value="other">Other</option></select></div>
+        <div><label for="cxMeal">Meal (optional)</label><select id="cxMeal"><option value="">All meals</option><option>Breakfast</option><option>Lunch</option><option>Dinner</option></select></div>
+        <div><label for="cxLabel">Label (optional)</label><input type="text" id="cxLabel" maxlength="80" placeholder="e.g. Mid-semester exams"></div>
+      </div>
+      <button class="btn sec" type="submit">Add note</button>
+    </form>
+    <div id="cxMsg" class="msg" role="status"></div>
+    <div class="tablewrap"><table><thead><tr><th>Date</th><th>Kind</th><th>Meal</th><th>Label</th><th></th></tr></thead><tbody id="cxBody"></tbody></table></div>
+  </div>
+</section>
+
+<!-- INSIGHTS -->
+<section class="panel" id="tab-insights">
+  <div class="card">
+    <h2>Food-waste insights</h2>
+    <p class="muted">Calculated by the server from your saved records using plain statistics (no AI involved). Each insight shows the period and quantities behind it. <span class="src obs">Observed</span> means what the records show; <span class="src hyp">Possible explanations</span> are ideas to check, not findings; correlation is not proof of cause.</p>
+    <label style="font-weight:400"><input type="checkbox" id="insNoSyn"> Leave out sample (synthetic) records</label>
+    <div class="btns"><button class="btn sec" id="btnInsRefresh" type="button">🔄 Recalculate</button></div>
+    <div id="insBody" aria-live="polite"><p class="muted">Open this tab to calculate.</p></div>
+  </div>
+</section>
+
+<!-- ALERTS -->
+<section class="panel" id="tab-alerts">
+  <div class="card">
+    <h2>Records flagged for review</h2>
+    <p class="muted">A flag means a record looks unusual compared with the previous sessions of the same meal. <b>It is a prompt to check, not proof of a mistake.</b> Ordinary variation can occasionally be flagged. Nothing here changes or deletes a meal record; your review is only logged.</p>
+    <label style="font-weight:400"><input type="checkbox" id="alShowDone"> Show flags I have already reviewed</label>
+    <label style="font-weight:400"><input type="checkbox" id="alNoSyn"> Leave out sample (synthetic) records</label>
+    <div id="alBody" aria-live="polite"><p class="muted">Open this tab to check.</p></div>
+  </div>
+</section>
+
+<!-- ASSISTANT -->
+<section class="panel" id="tab-assistant">
+  <div class="card">
+    <h2>Ask EcoPlate</h2>
+    <p class="muted">Ask about your own canteen data. Answers are built from numbers the server calculates; the assistant cannot change records or decide that food is safe. <span id="asMode"></span></p>
+    <div class="chips" id="asChips">
+      <button type="button" class="btn sec small asEx">Why was food waste high last week?</button>
+      <button type="button" class="btn sec small asEx">Which meal had the highest waste rate this month?</button>
+      <button type="button" class="btn sec small asEx">How did this week's leftovers compare with last week?</button>
+      <button type="button" class="btn sec small asEx">What is the predicted demand for tomorrow's lunch?</button>
+      <button type="button" class="btn sec small asEx">What factors influenced the latest forecast?</button>
+      <button type="button" class="btn sec small asEx">Which records require review?</button>
+      <button type="button" class="btn sec small asEx">What actions could help reduce unnecessary preparation?</button>
+    </div>
+    <form id="asForm" novalidate>
+      <label for="asQ">Your question (up to 500 characters)</label>
+      <textarea id="asQ" maxlength="500"></textarea>
+      <div class="btns"><button class="btn" id="asGo" type="submit">Ask</button></div>
+    </form>
+    <div id="asLog" class="chat" aria-live="polite"></div>
   </div>
 </section>
 
@@ -245,24 +348,52 @@ td.n,th.n{text-align:right}
 <section class="panel" id="tab-surplus">
   <div class="card">
     <h2>Surplus food sharing register</h2>
-    <p class="muted">Register safe, unserved food so it can be shared responsibly (for example with a student club or a local charity).</p>
+    <p class="muted">Register unserved food so it can be shared responsibly (for example with a student club or a local charity). <b>EcoPlate never decides that food is safe and never records that someone accepted or received food unless a staff member records it.</b></p>
     <form id="sForm" novalidate>
       <div class="row">
         <div><label for="sItem">Food item</label><input type="text" id="sItem" maxlength="80" placeholder="e.g. Veg biryani"></div>
-        <div><label for="sQty">Portions</label><input type="number" id="sQty" min="1" step="1"></div>
-        <div><label for="sLoc">Pickup location</label><input type="text" id="sLoc" maxlength="80" placeholder="e.g. Canteen back door"></div>
+        <div><label for="sQty">Portions</label><input type="number" id="sQty" min="1" max="10000" step="1"></div>
+        <div><label for="sMeal">Meal (optional)</label><select id="sMeal"><option value="">Not stated</option><option>Breakfast</option><option>Lunch</option><option>Dinner</option></select></div>
+        <div><label for="sStorage">How it is stored</label><select id="sStorage"><option value="unknown">Not recorded</option><option value="hot_held">Kept hot</option><option value="refrigerated">Refrigerated</option><option value="room_temp">Room temperature</option><option value="frozen">Frozen</option></select></div>
+        <div><label for="sPrep">Prepared at</label><input type="time" id="sPrep"></div>
         <div><label for="sUntil">Safe to eat until</label><input type="time" id="sUntil"></div>
+        <div><label for="sLoc">Pickup location</label><input type="text" id="sLoc" maxlength="80" placeholder="e.g. Canteen back door"></div>
       </div>
       <label style="font-weight:400"><input type="checkbox" id="sSafe"> I confirm this food is freshly served, properly stored and safe to eat.</label>
-      <div class="btns"><button class="btn" type="submit">Add to register</button></div>
+      <p class="muted">Not able to check the food yet? Use <b>Register for safety review</b>: it is saved as awaiting review, and a person confirms it later. Food without a safe-until time or storage condition cannot be offered to a recipient.</p>
+      <div class="btns"><button class="btn" type="submit">Add to register</button><button class="btn sec" type="button" id="sPending">Register for safety review (not confirmed)</button></div>
     </form>
-    <div id="sMsg" class="msg"></div>
+    <div id="sMsg" class="msg" role="status"></div>
+  </div>
+  <div class="card">
+    <h2>What to review first</h2>
+    <p class="muted">Suggestions are about <b>what a person should look at</b>, ordered by the time left. They are not safety decisions.</p>
+    <div id="sRecs"><p class="muted">Loading…</p></div>
+  </div>
+  <div class="card">
+    <h2>Register</h2>
     <div class="tablewrap">
       <table>
-        <thead><tr><th>Item</th><th>Portions</th><th>Pickup</th><th>Safe until</th><th>Registered</th><th>Status</th><th>Actions</th></tr></thead>
+        <thead><tr><th>Item</th><th>Portions</th><th>Meal</th><th>Pickup</th><th>Safe until</th><th>Storage</th><th>Registered</th><th>Status</th><th>Actions</th></tr></thead>
         <tbody id="sBody"></tbody>
       </table>
     </div>
+  </div>
+  <div class="card">
+    <h2>Recipients you have recorded</h2>
+    <p class="muted">Only organisations that staff enter here are ever suggested. EcoPlate does not know whether they are available; contact them yourself.</p>
+    <form id="rcForm" novalidate>
+      <div class="row">
+        <div><label for="rcName">Name</label><input type="text" id="rcName" maxlength="80"></div>
+        <div><label for="rcContact">Contact</label><input type="text" id="rcContact" maxlength="120"></div>
+        <div><label for="rcReq">Requirements</label><input type="text" id="rcReq" maxlength="200" placeholder="e.g. vegetarian only, own containers"></div>
+        <div><label for="rcMin">Minimum portions</label><input type="number" id="rcMin" min="1" step="1"></div>
+        <div><label for="rcMax">Maximum portions</label><input type="number" id="rcMax" min="1" step="1"></div>
+      </div>
+      <button class="btn sec" type="submit">Add recipient</button>
+    </form>
+    <div id="rcMsg" class="msg" role="status"></div>
+    <div class="tablewrap"><table><thead><tr><th>Name</th><th>Contact</th><th>Requirements</th><th>Portions</th><th></th></tr></thead><tbody id="rcBody"></tbody></table></div>
   </div>
 </section>
 
@@ -309,14 +440,14 @@ td.n,th.n{text-align:right}
   </div>
   <div class="card">
     <h2>Reset all data</h2>
-    <p class="muted">Deletes all meal history from the EcoPlate database and all surplus entries from this browser. (A raw safety copy of any very old browser data is kept in the browser.) A backup file downloads first; you must check that it is in your Downloads folder and then type RESET to confirm.</p>
+    <p class="muted">Deletes all meal history from the EcoPlate database and the old surplus copy kept in this browser. Surplus register entries on the server are kept as an audit trail. (A raw safety copy of any very old browser data is kept in the browser.) A backup file downloads first; you must check that it is in your Downloads folder and then type RESET to confirm.</p>
     <button class="btn danger" id="btnReset" type="button">Reset all data…</button>
   </div>
   <div class="card">
     <h2>About this prototype</h2>
     <ul>
       <li><b>Real machine learning, with safeguards:</b> forecasts come from a scikit-learn Gradient Boosting model trained on your own records, but only when there is enough history and the model beats simple baselines on a held-out recent period. Otherwise a rule-based average is used and labelled as such (see the Model tab).</li>
-      <li><b>Where data lives:</b> meal records are stored by the local EcoPlate server in a SQLite file (<code>ecoplate.db</code>). The surplus register is still stored in this browser (<code>localStorage</code>). Full backups include both. This is a single-computer prototype with no user accounts; a real canteen system needs proper access control.</li>
+      <li><b>Where data lives:</b> meal records are stored by the local EcoPlate server in a SQLite file (<code>ecoplate.db</code>). The surplus register is also stored in the database now (an older copy in this browser is copied over once and kept as a safety copy). Full backups include both. Access control is optional: set <code>ECOPLATE_ACCESS_CODE</code> on the server to require a login; without it anyone who can open the site can change data.</li>
       <li><b>Sample data is not real:</b> accuracy scores measured on sample (synthetic) records only describe that invented data, not a real canteen.</li>
       <li>Always check imported data. The forecast is only as good as the records.</li>
     </ul>
@@ -340,7 +471,7 @@ var DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'S
 
 /* state.records is a read-only MIRROR of the meal records stored in the server database (refreshRecords()).
    The surplus register, unconverted entries and last-import note stay in the browser (localStorage). */
-var state = { version: 3, records: [], surplus: [], unmapped: [], lastImport: null, migrated: null };
+var state = { version: 3, records: [], surplus: [], unmapped: [], lastImport: null, migrated: null, surplusMigrated: null };
 var legacyLocal = null;     /* meal records found in old browser data, until they are safely copied to the server */
 var serverUp = false, serverInfo = null, lastReport = null;
 var pending = null;
@@ -531,6 +662,7 @@ function load() {
     state.unmapped = Array.isArray(data.unmapped) ? data.unmapped : [];
     state.lastImport = data.lastImport || null;
     state.migrated = data.migrated || { at: '' };
+    state.surplusMigrated = data.surplusMigrated || null;
     return;
   }
   if (data && data.version === 2 && Array.isArray(data.records)) {   /* previous (browser-only) format */
@@ -561,19 +693,20 @@ function load() {
 function save() {
   /* Until old meal records have been copied to the server they stay in the browser copy (version 2), so nothing is ever dropped. */
   var o = state.migrated
-    ? { version: 3, surplus: state.surplus, unmapped: state.unmapped, lastImport: state.lastImport, migrated: state.migrated }
+    ? { version: 3, surplus: state.surplus, unmapped: state.unmapped, lastImport: state.lastImport, migrated: state.migrated, surplusMigrated: state.surplusMigrated }
     : { version: 2, records: legacyLocal || [], surplus: state.surplus, unmapped: state.unmapped, lastImport: state.lastImport };
   try { localStorage.setItem(KEY, JSON.stringify(o)); return true; }
   catch (e) { return false; }
 }
 /* ---------- server API ---------- */
 function api(method, path, body) {
-  var opt = { method: method, headers: {} };
+  var opt = { method: method, headers: { 'X-Requested-With': 'EcoPlate' } };
   if (body !== undefined) { opt.headers['Content-Type'] = 'application/json'; opt.body = JSON.stringify(body); }
   return fetch(path, opt).then(function (res) {
     return res.text().then(function (t) {
       var data = null;
       try { data = t ? JSON.parse(t) : null; } catch (e) {}
+      if (res.status === 401 && data && data.code === 'login_required') showLogin('Please log in to continue.');
       return { ok: res.ok, status: res.status, data: data };
     });
   }, function () { return { ok: false, status: 0, data: null, network: true }; });
@@ -725,7 +858,7 @@ function exportCSV() {
 }
 function backupJSON() {          /* returns the file name, or null if the file could not be created */
   var o = { app: 'EcoPlate', backupVersion: 2, exportedAt: new Date().toISOString(),
-    records: state.records, surplus: state.surplus, unmapped: state.unmapped, lastImport: state.lastImport };
+    records: state.records, surplus: surplusForBackup(), unmapped: state.unmapped, lastImport: state.lastImport };
   var name = 'ecoplate-backup-' + todayISO() + '.json';
   try { download(name, JSON.stringify(o, null, 1), 'application/json'); return name; }
   catch (e) { return null; }
@@ -967,7 +1100,7 @@ function renderForecast(d) {
   var h = '<div class="card" style="margin-top:14px;background:#f8fbf9">';
   h += '<div class="msg ' + info.cls + ' modebox"><b>' + esc(info.title) + '</b><br>Method used: <b>' + esc(d.method_label) + '</b><br>' + esc(info.text) +
        (d.fallback_reason ? '<br><i>Reason: ' + esc(d.fallback_reason) + '</i>' : '') + '</div>';
-  h += '<h3 style="margin-top:0">Recommended: prepare</h3>';
+  h += '<h3 style="margin-top:0"><span class="src fc">Forecast (an estimate, not a fact)</span>Recommended: prepare</h3>';
   h += '<div class="big">' + num(d.recommended) + ' <span style="font-size:1rem;font-weight:600">' + esc(d.meal) + ' portions</span></div>';
   h += '<p>Reliability: <span class="tag ' + relCls + '">' + esc(rel.level) + '</span> <span class="muted">' + rel.reasons.map(esc).join('; ') + '.</span></p>';
   var how = d.ml_used
@@ -987,7 +1120,7 @@ function renderForecast(d) {
     '<tr><td>Expected demand</td><td class="n">' + f1(d.expected_demand) + '</td></tr>' +
     '<tr><td>Predicted surplus if demand is as expected</td><td class="n"><b>' + f1(d.expected_surplus) + '</b></td></tr>';
   if (d.demand_range) {
-    h += '<tr><td>Likely demand range (80% of recent unseen days; ' + d.demand_range.basis_rows + ' days)</td><td class="n">' + f1(d.demand_range.low) + ' – ' + f1(d.demand_range.high) + '</td></tr>' +
+    h += '<tr><td>Likely demand range (approx. ' + Math.round((d.demand_range.coverage || 0.8) * 100) + '%, from ' + d.demand_range.basis_rows + ' past out-of-sample errors)</td><td class="n">' + f1(d.demand_range.low) + ' – ' + f1(d.demand_range.high) + '</td></tr>' +
          '<tr><td>Predicted surplus range</td><td class="n">' + f1(d.surplus_range.low) + ' – ' + f1(d.surplus_range.high) + '</td></tr>' +
          '<tr><td>Possible shortfall if demand is at the high end</td><td class="n">' + f1(d.shortfall_risk) + '</td></tr>';
   } else h += '<tr><td colspan="2" class="muted">No uncertainty range: there were not enough recent unseen days to estimate one.</td></tr>';
@@ -1004,6 +1137,13 @@ function renderForecast(d) {
   } else h += '<p class="muted">No accuracy test was possible yet: ' + esc(rep.reason || 'not enough data') + '</p>';
   if (rep.data_warning) h += '<div class="msg warn"><b>Sample data warning.</b> ' + esc(rep.data_warning) + '</div>';
   h += '<p class="muted">History used: ' + num(ctx.history_records) + ' ' + esc(d.meal) + ' record(s), latest on ' + esc(ctx.latest_record) + '.</p>';
+  (d.risk_notes || []).forEach(function (n) { h += '<div class="msg warn"><b>Shortage check.</b> ' + esc(n) + '</div>'; });
+  (d.calendar_context || []).forEach(function (c) { h += '<div class="msg info"><b>Calendar note (context only).</b> ' + esc(c.message) + '</div>'; });
+  if (rep.rolling_origin) {
+    var ro = rep.rolling_origin;
+    h += '<p class="muted">Rolling-origin check over ' + ro.valid_folds + ' consecutive periods (' + num(ro.n_rows) + ' rows): Gradient Boosting MAE ' + f1(ro.gbm.mae) + ' vs ' + f1(ro.best_baseline_mae) + ' for the best baseline; better in ' + ro.folds_won + ' of ' + ro.valid_folds + ' periods.</p>';
+  }
+  if ((d.limitations || []).length) h += '<details open><summary>Limitations of this forecast</summary><ul>' + d.limitations.map(function (x) { return '<li>' + esc(x) + '</li>'; }).join('') + '</ul></details>';
   h += '<div class="msg info">Only count leftovers that are still safe to serve. Past accuracy does not guarantee future accuracy; use your judgement for special events and exams.</div></div>';
   return h;
 }
@@ -1072,6 +1212,18 @@ function renderModelReport(rep) {
       h += '</tbody></table></div>';
     }
   } else h += '<div class="msg info">No accuracy test has been run yet because there is not enough data.</div>';
+  if (rep.rolling_origin) {
+    var ro2 = rep.rolling_origin;
+    h += '<h3>Rolling-origin check (several consecutive periods)</h3><p class="muted">Each period is predicted by a model trained only on earlier dates. Gradient Boosting must also win here, not just on the final hold-out, before it is used.</p><div class="tablewrap"><table><thead><tr><th>Test period</th><th class="n">Rows</th><th class="n">Gradient Boosting MAE</th><th class="n">Best baseline MAE</th><th>Better?</th></tr></thead><tbody>';
+    ro2.folds.forEach(function (f) {
+      var bm2 = { rule_based: f.rule_based_mae, recent7: f.recent7_mae, train_mean: f.train_mean_mae }[ro2.best_baseline];
+      h += '<tr><td>' + esc(f.test_from) + ' to ' + esc(f.test_to) + '</td><td class="n">' + f.n + '</td><td class="n">' + f1(f.gbm_mae) + '</td><td class="n">' + f1(bm2) + '</td><td>' + (f.gbm_beat_best_baseline ? 'yes' : 'no') + '</td></tr>';
+    });
+    h += '</tbody></table></div>';
+    var gates = Object.keys(rep.meal_gate || {}).filter(function (k) { return rep.meal_gate[k].ok === false; });
+    if (gates.length) h += '<div class="msg warn">Not trusted for: ' + gates.map(esc).join(', ') + ' (the model was less accurate than the baseline for that meal in this check).</div>';
+  }
+  if (rep.retrain_policy) h += '<p class="muted"><b>When the model retrains.</b> ' + esc(rep.retrain_policy) + '</p>';
   h += '<div class="msg info"><b>How to read these numbers.</b> The test shows how the model would have done on the most recent days of <i>your own records</i>. It does not guarantee future accuracy' +
        (d.synthetic_records ? ', and because some or all records are sample (synthetic) data, it is NOT evidence of real-world canteen accuracy' : '') + '.</div>';
   h += '<details><summary>Technical details</summary><div class="kvs"><div><b>Model:</b> ' + esc(rep.model) + '</div><div><b>Version:</b> ' + esc(rep.model_version) + '</div><div><b>Trained at:</b> ' + esc(rep.trained_at) + '</div><div><b>Data fingerprint:</b> ' + esc(rep.fingerprint || '–') + '</div></div>' +
@@ -1112,8 +1264,7 @@ function renderDashboard() {
     if (!minD || r.date < minD) minD = r.date;
     if (r.date > maxD) maxD = r.date;
   });
-  var avail = 0;
-  state.surplus.forEach(function (s) { if (s.status !== 'Collected') avail += Number(s.portions) || 0; });
+  var avail = serverSurplus.loaded ? serverSurplus.avail : 0;
   $('sRecords').textContent = num(state.records.length);
   $('sPrepared').textContent = num(tp);
   $('sLeft').textContent = num(tl);
@@ -1150,20 +1301,11 @@ function renderHistory() {
   $('hPrev').disabled = histPage <= 1;
   $('hNext').disabled = histPage >= pages;
 }
-function renderSurplus() {
-  var rows = state.surplus.slice().reverse().map(function (s) {
-    var avail = s.status !== 'Collected';
-    return '<tr><td class="wrap">' + esc(s.item) + '</td><td>' + esc(s.portions) + '</td><td class="wrap">' + esc(s.location || '-') + '</td><td>' + esc(s.safeUntil || '-') + '</td><td>' + esc(s.created || '') + '</td><td><span class="tag ' + (avail ? 'ok' : 'info') + '">' + esc(s.status) + '</span></td><td>' +
-      (avail ? '<button class="btn sec small" data-act="collect" data-id="' + esc(s.id) + '">Mark collected</button> ' : '') +
-      '<button class="btn danger small" data-act="del" data-id="' + esc(s.id) + '">Delete</button></td></tr>';
-  }).join('');
-  $('sBody').innerHTML = rows || '<tr><td colspan="7" class="muted">No surplus food registered yet.</td></tr>';
-}
 function renderData() {
   var len = 0;
   [KEY, V1_BACKUP, PRE_BACKEND, UNREADABLE].forEach(function (k) { try { var v = localStorage.getItem(k); if (v) len += v.length; } catch (e) {} });
   var kb = Math.round(len / 1024), pct = Math.min(100, Math.round(len / 5000000 * 100));
-  $('storTxt').textContent = 'The browser holds the surplus register (' + state.surplus.length + ' entries), notes about unconverted entries, and any safety copies of old data: about ' + num(kb) + ' KB of roughly 5,000 KB available (' + pct + '%). Meal records are stored in the EcoPlate database, not here.';
+  $('storTxt').textContent = 'The browser holds a safety copy of the old surplus register (' + state.surplus.length + ' entries; the live register is on the server), notes about unconverted entries, and any safety copies of old data: about ' + num(kb) + ' KB of roughly 5,000 KB available (' + pct + '%). Meal records are stored in the EcoPlate database, not here.';
   $('storBar').value = pct;
   flash('storWarn', pct >= 80 ? 'Browser storage is almost full. Export a backup before adding more data.' : '', pct >= 80 ? 'warn' : '');
   var nSyn = state.records.filter(function (r) { return r.synthetic; }).length;
@@ -1171,7 +1313,8 @@ function renderData() {
     $('beTxt').textContent = 'Connected. ' + num(state.records.length) + ' meal record(s) are stored in "' + serverInfo.database + '" (' + num(nSyn) + ' of them sample/synthetic). Model: ' + serverInfo.model + ', scikit-learn ' + serverInfo.versions.scikit_learn + '.';
   } else $('beTxt').textContent = 'Not connected to the EcoPlate server.';
   var mg = state.migrated;
-  $('beMig').textContent = (mg && mg.sent) ? 'Records found in this browser on ' + new Date(mg.at).toLocaleString() + ' were copied to the database: ' + mg.sent + ' found, ' + mg.added + ' added, ' + mg.same + ' already stored, ' + mg.conflicts + ' conflicting, ' + mg.invalid + ' rejected.' : '';
+  var stNote = (serverInfo && serverInfo.storage_note) ? ' ' + serverInfo.storage_note : '';
+  $('beMig').textContent = stNote + ' ' + ((mg && mg.sent) ? 'Records found in this browser on ' + new Date(mg.at).toLocaleString() + ' were copied to the database: ' + mg.sent + ' found, ' + mg.added + ' added, ' + mg.same + ' already stored, ' + mg.conflicts + ' conflicting, ' + mg.invalid + ' rejected.' : '');
   $('sampleBox').style.display = nSyn ? 'block' : 'none';
   $('sampleTxt').textContent = num(nSyn) + ' record(s) are invented sample data. Remove them before relying on forecasts for real planning. Records you entered or imported yourself are not touched.';
   var li = state.lastImport;
@@ -1184,47 +1327,14 @@ function renderAll() {
   renderDashboard(); renderHistory(); renderSurplus(); renderData();
   if (fcShown) runForecast(null);                 /* keep an open forecast in step with the records */
   loadModelPanel(false);                          /* refreshes the Model tab and dashboard card (server retrains only if records changed) */
+  insStale = true; alStale = true;
+  loadSurplus();
+  var act = document.querySelector('.panel.active');
+  if (act && act.id === 'tab-dashboard') loadAttention();
+  if (act && act.id === 'tab-insights') loadInsights();
+  if (act && act.id === 'tab-alerts') loadAlerts();
 }
 
-/* ---------- surplus ---------- */
-function addSurplus(e) {
-  e.preventDefault();
-  var item = $('sItem').value.trim(), q = $('sQty').value.trim();
-  if (!item) return flash('sMsg', 'Please enter the food item.', 'err');
-  if (!/^\d+$/.test(q) || parseInt(q, 10) < 1 || parseInt(q, 10) > 10000) return flash('sMsg', 'Portions must be a whole number from 1 to 10,000.', 'err');
-  if (!$('sSafe').checked) return flash('sMsg', 'Please confirm that the food is safe to share.', 'err');
-  var s = { id: uid(), item: item.slice(0, 80), portions: parseInt(q, 10), location: $('sLoc').value.trim().slice(0, 80), safeUntil: $('sUntil').value, created: new Date().toLocaleString(), status: 'Available' };
-  if (commit(function () { state.surplus = state.surplus.concat([s]); })) {
-    flash('sMsg', 'Added to the surplus register.', 'ok');
-    $('sItem').value = ''; $('sQty').value = ''; $('sLoc').value = ''; $('sUntil').value = ''; $('sSafe').checked = false;
-    renderAll();
-  } else flash('sMsg', 'Could not save: browser storage is full or blocked.', 'err');
-}
-function surplusClick(e) {
-  var b = e.target.closest('button[data-act]');
-  if (!b) return;
-  var id = b.getAttribute('data-id'), act = b.getAttribute('data-act'), entry = null;
-  state.surplus.forEach(function (s) { if (s.id === id) entry = s; });
-  if (!entry) { flash('sMsg', 'That entry no longer exists. The list has been refreshed.', 'warn'); renderAll(); return; }
-  var name = '"' + entry.item + '"', ok;
-  if (act === 'del') {
-    if (!confirm('Delete this surplus entry?')) return;
-    ok = commit(function () { state.surplus = state.surplus.filter(function (s) { return s.id !== id; }); });
-    if (ok) flash('sMsg', 'Deleted ' + name + ' from the surplus register.', 'ok');
-    else flash('sMsg', 'NOT deleted: the change could not be saved (browser storage is full or blocked). ' + name + ' is still in the register.', 'err');
-  } else {
-    if (entry.status === 'Collected') { flash('sMsg', name + ' is already marked as collected.', 'info'); return; }
-    ok = commit(function () {
-      state.surplus = state.surplus.map(function (s) {
-        if (s.id !== id) return s;
-        var c = {}; for (var k in s) c[k] = s[k]; c.status = 'Collected'; return c;
-      });
-    });
-    if (ok) flash('sMsg', 'Marked ' + name + ' as collected.', 'ok');
-    else flash('sMsg', 'NOT marked as collected: the change could not be saved (browser storage is full or blocked). ' + name + ' is still shown as available.', 'err');
-  }
-  renderAll();   /* on failure commit() has already restored the previous state, so this shows the true state */
-}
 async function historyClick(e) {
   var b = e.target.closest('button[data-del]');
   if (!b) return;
@@ -1289,14 +1399,15 @@ function restoreFile(file) {
     if (v.fatal) { done('Restore refused. ' + v.fatal + ' Your current data was not changed.', 'err'); return; }
     var msg = 'This backup is valid and has ' + num(v.recs.length) + ' record(s) and ' + v.sur.length + ' surplus entr' + (v.sur.length === 1 ? 'y' : 'ies') +
               '.\n\nRestoring REPLACES all current data (' + num(state.records.length) + ' record(s), ' + state.surplus.length + ' surplus entr' + (state.surplus.length === 1 ? 'y' : 'ies') +
-              '). A backup of your current data will download first. Continue?\n\n(To ADD an old backup without replacing anything, use "Merge an old backup" instead.)';
+              '). Meal records are replaced; surplus register entries are only ADDED (the register is an audit trail and is never wiped by a restore). A backup of your current data will download first. Continue?\n\n(To ADD an old backup without replacing anything, use "Merge an old backup" instead.)';
     if (!confirm(msg)) { done('Restore cancelled. Your current data was not changed.', 'info'); return; }
     var saved = backupJSON();
     if (!saved) { done('Restore stopped: a safety backup of your current data could not be created. Your current data was not changed.', 'err'); return; }
     var rr = await api('POST', '/api/records/replace', { records: v.recs, confirm: 'REPLACE_ALL_RECORDS' });
     if (!rr.ok) { done('Restore FAILED: ' + apiErr(rr) + ' Nothing was changed; your previous data is still in place.', 'err'); return; }
+    await importSurplusEntries(v.sur);
     var ok = commit(function () {
-      state.surplus = v.sur; state.unmapped = v.unmapped;
+      state.unmapped = v.unmapped;
       state.lastImport = null;
     });
     await refreshRecords();
@@ -1328,7 +1439,8 @@ function mergeFile(file) {
     var newSur = v.sur.filter(function (s) { return !have[s.id]; });
     var extra = v.unmapped.slice();
     (res.conflicts || []).forEach(function (c) { extra.push({ reason: 'Merge: the database already has a different ' + c.meal + ' record for ' + c.date + ' (prepared ' + c.kept.prepared + ', leftovers ' + c.kept.leftovers + '); the database values were kept', raw: recs[c.index] }); });
-    commit(function () { state.surplus = state.surplus.concat(newSur); state.unmapped = state.unmapped.concat(extra); });
+    await importSurplusEntries(newSur);
+    commit(function () { state.unmapped = state.unmapped.concat(extra); });
     await refreshRecords();
     done('Merge complete. Added ' + num(res.added) + ' meal record(s); skipped ' + num(res.duplicate_identical) + ' already stored and ' + num(res.conflict_count) + ' with different values (kept yours, stored the other under Backup & Reset). Added ' + newSur.length + ' surplus entr' + (newSur.length === 1 ? 'y' : 'ies') + '.', res.conflict_count ? 'warn' : 'ok');
     renderAll();
@@ -1349,7 +1461,7 @@ async function removeSample() {
 async function doReset() {
   if (needServer('dataMsg')) return;
   var nR = state.records.length, nS = state.surplus.length, nU = state.unmapped.length;
-  if (!confirm('RESET will permanently delete ALL data:\n- ' + num(nR) + ' history record(s) in the EcoPlate database\n- ' + num(nS) + ' surplus entr' + (nS === 1 ? 'y' : 'ies') +
+  if (!confirm('RESET will permanently delete ALL data:\n- ' + num(nR) + ' history record(s) in the EcoPlate database\n- (the ' + num(serverSurplus.items.length) + ' surplus register entr' + (serverSurplus.items.length === 1 ? 'y is' : 'ies are') + ' kept on the server as an audit trail)' +
                '\n- ' + num(nU) + ' unconverted old entr' + (nU === 1 ? 'y' : 'ies') +
                '\n\nStep 1 of 2: a backup file will be downloaded now. The browser cannot confirm that the file was really saved, so YOU must check your Downloads folder.\n\nContinue?')) {
     flash('dataMsg', 'Reset cancelled. Nothing was deleted.', 'info'); return;
@@ -1365,6 +1477,324 @@ async function doReset() {
   flash('dataMsg', 'All data has been reset. Your backup file "' + saved + '" should be in your Downloads folder.', 'ok'); renderAll();
 }
 
+
+/* ---------- upgrade: login, attention, insights, alerts, assistant, calendar notes, surplus ---------- */
+var auth = { enabled: false, role: null };
+var serverSurplus = { items: [], recs: [], recipients: [], counts: {}, avail: 0, loaded: false };
+var insStale = true, alStale = true, alData = null, asBusy = false;
+
+function showLogin(msg) {
+  $('loginCard').style.display = 'block';
+  if (msg) flash('loginMsg', msg, 'warn');
+  try { $('loginCode').focus(); } catch (e) {}
+}
+async function doLogin(e) {
+  e.preventDefault();
+  var code = $('loginCode').value;
+  if (!code) { flash('loginMsg', 'Enter the access code.', 'err'); return; }
+  var r = await api('POST', '/api/auth/login', { code: code });
+  if (!r.ok) { flash('loginMsg', apiErr(r, 'Login failed.'), 'err'); return; }
+  $('loginCode').value = ''; flash('loginMsg', '', '');
+  auth.role = r.data.role;
+  bootstrap();
+}
+async function doLogout() { await api('POST', '/api/auth/logout', {}); location.reload(); }
+function loading(text) { return '<div class="msg info" role="status"><span class="spin" aria-hidden="true"></span>' + esc(text) + '</div>'; }
+function loadErr(r, what) { return '<div class="msg err">' + esc(apiErr(r, 'Could not load ' + what + '.')) + '</div>'; }
+
+/* ----- dashboard: needs attention ----- */
+async function loadAttention() {
+  var box = $('dashAttention');
+  if (!serverUp) { box.innerHTML = '<h2>Needs attention</h2><p class="muted">The EcoPlate server is not connected.</p>'; return; }
+  var res = await Promise.all([api('GET', '/api/insights'), api('GET', '/api/anomalies?days=90')]);
+  var i = res[0], a = res[1];
+  if (!i.ok || !a.ok) { box.innerHTML = '<h2>Needs attention</h2>' + loadErr(i.ok ? a : i, 'alerts'); return; }
+  var att = i.data.insights.filter(function (x) { return x.severity === 'attention'; });
+  var h = '<h2>Needs attention</h2>';
+  if (!state.records.length) h += '<p class="muted">No records yet, so there is nothing to analyse.</p>';
+  else {
+    h += '<p><span class="src obs">Observed</span> ' + att.length + ' insight(s) flagged for attention, and ' + a.data.open + ' record(s) flagged for review in the last 90 days.</p>';
+    att.slice(0, 2).forEach(function (x) { h += '<p class="muted">' + esc(x.summary) + '</p>'; });
+    if (i.data.warnings.length) h += '<div class="msg warn">' + esc(i.data.warnings[0]) + '</div>';
+    h += '<div class="btns"><button class="btn sec small" type="button" data-goto="insights">See insights</button> <button class="btn sec small" type="button" data-goto="alerts">See alerts</button></div>';
+  }
+  box.innerHTML = h;
+}
+
+/* ----- insights ----- */
+function renderInsights(d) {
+  var h = '';
+  d.warnings.forEach(function (w) { h += '<div class="msg warn">' + esc(w) + '</div>'; });
+  h += '<p class="muted">Based on ' + num(d.records_used) + ' record(s)' + (d.period.from ? ' from ' + esc(d.period.from) + ' to ' + esc(d.period.to) : '') + '.</p>';
+  if (!d.insights.length) h += '<div class="msg info">No insights yet. ' + (d.insufficient_data[0] ? esc(d.insufficient_data[0].message) : '') + '</div>';
+  d.insights.forEach(function (x) {
+    var o = x.observed || {}, thr = x.thresholds ? JSON.stringify(x.thresholds) : '';
+    var per = o.recent_period ? o.recent_period : (o.period && o.period.from ? o.period : null);
+    h += '<div class="ins sev-' + esc(x.severity) + '"><h3>' + esc(x.title) + '</h3>' +
+      '<p><span class="src obs">Observed in your records</span>' + esc(x.summary) + '</p>' +
+      '<p class="muted">Records used: ' + num((x.data || {}).records_used || 0) + (per ? '. Period: ' + esc(per.from) + ' to ' + esc(per.to) : '') + (thr ? '. Rules applied: ' + esc(thr) : '') + '</p>';
+    if (x.possible_explanations && x.possible_explanations.length)
+      h += '<p><span class="src hyp">Possible explanations (not established)</span></p><ul>' + x.possible_explanations.map(function (t) { return '<li>' + esc(t) + '</li>'; }).join('') + '</ul>';
+    if (x.recommendation) h += '<p><span class="src act">Suggested review</span>' + esc(x.recommendation) + '</p>';
+    if (x.caveat) h += '<p class="muted">' + esc(x.caveat) + '</p>';
+    h += '</div>';
+  });
+  if (d.insufficient_data.length) {
+    h += '<details open><summary>Not enough data yet (' + d.insufficient_data.length + ')</summary><ul>' + d.insufficient_data.map(function (x) { return '<li>' + esc(x.message) + '</li>'; }).join('') + '</ul></details>';
+  }
+  return h;
+}
+async function loadInsights() {
+  if (!serverUp) { $('insBody').innerHTML = '<div class="msg warn">The EcoPlate server is not connected.</div>'; return; }
+  $('insBody').innerHTML = loading('Calculating from your records…');
+  var r = await api('GET', '/api/insights' + ($('insNoSyn').checked ? '?exclude_synthetic=1' : ''));
+  if (!r.ok || !r.data) { $('insBody').innerHTML = loadErr(r, 'insights'); return; }
+  insStale = false;
+  $('insBody').innerHTML = renderInsights(r.data);
+}
+
+/* ----- alerts (anomalies) ----- */
+var KIND_LABEL = { high_leftovers: 'Unusually high leftovers', all_left_over: 'All portions left over', unusual_prepared: 'Unusual prepared quantity', demand_discrepancy: 'Unusual quantity eaten', sudden_change: 'Sudden change over three sessions' };
+async function loadAlerts() {
+  if (!serverUp) { $('alBody').innerHTML = '<div class="msg warn">The EcoPlate server is not connected.</div>'; return; }
+  $('alBody').innerHTML = loading('Checking records against earlier sessions…');
+  var r = await api('GET', '/api/anomalies?days=90' + ($('alNoSyn').checked ? '&exclude_synthetic=1' : ''));
+  if (!r.ok || !r.data) { $('alBody').innerHTML = loadErr(r, 'alerts'); return; }
+  alData = r.data; alStale = false;
+  renderAlerts();
+}
+function renderAlerts() {
+  var d = alData;
+  if (!d) return;
+  var showDone = $('alShowDone').checked;
+  var list = d.flags.filter(function (f) { return showDone || !f.review || f.review.stale; });
+  var h = '<p class="muted">Checked ' + num(d.records_checked) + ' record(s); showing the last ' + d.period_days + ' days. Method: ' + esc(d.method.name) + ' (flag at ' + d.method.z_threshold + ' or more, needing at least ' + d.method.min_reference + ' earlier sessions of the same meal).</p>';
+  if (d.synthetic_records_included) h += '<div class="msg warn">' + num(d.synthetic_records_included) + ' record(s) checked are sample (synthetic) data.</div>';
+  if (!list.length) h += '<div class="msg ok">' + (d.records_checked < d.method.min_reference ? 'Not enough records yet: at least ' + d.method.min_reference + ' earlier sessions of a meal are needed before it can be checked.' : 'No flags to review. Nothing unusual was found compared with earlier sessions.') + '</div>';
+  list.forEach(function (f) {
+    var rv = f.review, done = rv && !rv.stale, ref = f.reference || {};
+    var da = 'data-date="' + esc(f.date) + '" data-meal="' + esc(f.meal) + '" data-kind="' + esc(f.kind) + '"';
+    h += '<div class="flag' + (done ? ' reviewed' : '') + '"><b>' + esc(KIND_LABEL[f.kind] || f.kind) + '</b>: ' + esc(f.date) + ' ' + esc(f.meal) + (f.synthetic ? ' <span class="syn">synthetic</span>' : '') +
+      '<p><span class="src obs">Observed</span>' + f.prepared + ' prepared, ' + f.leftovers + ' left over (' + f.leftover_rate_pct + '%).</p>' +
+      '<p>' + esc(f.reason) + '</p>' +
+      '<p class="muted">Compared with ' + (ref.sessions || 0) + ' earlier session(s), ' + esc(ref.from || '') + ' to ' + esc(ref.to || '') + (ref.quantity_comparison ? ' (quantities: ' + esc(ref.quantity_comparison) + ')' : '') + '.</p>';
+    if (f.possible_explanations && f.possible_explanations.length) h += '<p><span class="src hyp">Possible explanations (not established)</span>' + f.possible_explanations.map(esc).join(' ') + '</p>';
+    if (done) {
+      h += '<p><span class="tag ok">Reviewed: ' + esc({ reviewed_ok: 'looks fine', confirmed_error: 'recorded in error', dismissed: 'dismissed' }[rv.status] || rv.status) + '</span> ' + esc(rv.note || '') + ' <span class="muted">(' + esc(rv.reviewed_at) + ')</span>' +
+        (rv.status === 'confirmed_error' ? '<br><span class="muted">The record was not changed. To correct it, delete it in History and enter it again.</span>' : '') +
+        ' <button class="btn sec small" type="button" data-al="reopen" ' + da + '>Re-open</button></p>';
+    } else {
+      if (rv && rv.stale) h += '<div class="msg warn">This record changed after it was last reviewed, so it needs a new review.</div>';
+      var idb = 'n' + (f.date + f.meal + f.kind).replace(/[^A-Za-z0-9]/g, '');
+      h += '<label for="' + idb + '">Note (optional)</label><input type="text" id="' + idb + '" maxlength="300" placeholder="e.g. Fest day, extra stock">' +
+        '<div class="btns"><button class="btn sec small" type="button" data-al="reviewed_ok" ' + da + ' data-note="' + idb + '">Looks fine</button>' +
+        '<button class="btn sec small" type="button" data-al="confirmed_error" ' + da + ' data-note="' + idb + '">Recorded in error</button>' +
+        '<button class="btn sec small" type="button" data-al="dismissed" ' + da + ' data-note="' + idb + '">Dismiss</button></div>';
+    }
+    h += '</div>';
+  });
+  h += '<div class="msg info">' + esc(d.method.why_not_ml) + '</div>';
+  $('alBody').innerHTML = h;
+}
+async function alertClick(e) {
+  var b = e.target.closest('button[data-al]');
+  if (!b) return;
+  var act = b.getAttribute('data-al'), d = b.getAttribute('data-date'), m = b.getAttribute('data-meal'), k = b.getAttribute('data-kind'), r;
+  if (act === 'reopen') r = await api('DELETE', '/api/anomalies/review?date=' + encodeURIComponent(d) + '&meal=' + encodeURIComponent(m) + '&kind=' + encodeURIComponent(k));
+  else {
+    var inp = $(b.getAttribute('data-note'));
+    r = await api('POST', '/api/anomalies/review', { date: d, meal: m, kind: k, status: act, note: inp ? inp.value : '' });
+  }
+  if (!r.ok) { notice('Could not save the review: ' + apiErr(r), 'err'); return; }
+  await loadAlerts(); loadAttention();
+}
+
+/* ----- assistant ----- */
+async function loadAssistantMode() {
+  if (!serverUp) { $('asMode').textContent = ''; return; }
+  var r = await api('GET', '/api/assistant/status');
+  if (r.ok && r.data) $('asMode').innerHTML = r.data.mode === 'ai_wording'
+    ? '<span class="src ai">AI wording on</span>Numbers in AI-written answers are checked against your data.'
+    : '<span class="src obs">Data-only mode</span>No AI service is configured, so answers show your data directly. Everything else in EcoPlate works as normal.';
+}
+async function askAssistant(q) {
+  q = String(q || '').trim();
+  var log = $('asLog');
+  if (q.length < 3) { notice('Please type a question first.', 'warn'); return; }
+  if (asBusy) return;
+  if (!serverUp) { notice('The EcoPlate server is not connected.', 'err'); return; }
+  asBusy = true; $('asGo').disabled = true;
+  var qb = document.createElement('div'); qb.className = 'bubble q'; qb.textContent = q; log.appendChild(qb);
+  var wait = document.createElement('div'); wait.className = 'bubble a'; wait.innerHTML = loading('Looking at your records…'); log.appendChild(wait);
+  var r = await api('POST', '/api/assistant/ask', { question: q });
+  var out;
+  if (!r.ok || !r.data) out = '<div class="msg err">' + esc(apiErr(r, 'The assistant could not answer right now. The rest of EcoPlate is not affected.')) + '</div>';
+  else {
+    var d = r.data;
+    var badge = d.source === 'llm' ? '<span class="src ai">AI wording, numbers checked against your data</span>' : d.source === 'refusal' ? '<span class="src act">Not done</span>' : '<span class="src obs">From your data</span>';
+    out = '<div>' + badge + (d.insufficient_data ? '<span class="src hyp">Limited data</span>' : '') + '</div><div class="ans">' + esc(d.answer) + '</div>';
+    if (d.source !== 'llm' && d.llm && d.llm.status !== 'not_called' && d.llm.status !== 'not_configured') out += '<p class="muted">AI wording unavailable: ' + esc(d.llm.message) + '</p>';
+    if (d.sections && d.sections.length && d.source !== 'refusal') out += '<details><summary>Data used (' + d.sections.length + ' section' + (d.sections.length === 1 ? '' : 's') + ')</summary>' + d.sections.map(function (sc) { return '<p><b>' + esc(sc.title) + '</b></p><ul>' + sc.lines.map(function (l) { return '<li>' + esc(l) + '</li>'; }).join('') + '</ul>'; }).join('') + '</details>';
+  }
+  wait.innerHTML = out;
+  $('asQ').value = ''; asBusy = false; $('asGo').disabled = false;
+  wait.scrollIntoView({ block: 'nearest' });
+}
+
+/* ----- calendar notes ----- */
+async function loadNotes() {
+  if (!serverUp) return;
+  var r = await api('GET', '/api/context');
+  if (!r.ok || !r.data) { $('cxBody').innerHTML = '<tr><td colspan="5" class="muted">' + esc(apiErr(r)) + '</td></tr>'; return; }
+  $('cxBody').innerHTML = r.data.notes.length ? r.data.notes.map(function (n) {
+    return '<tr><td>' + esc(n.date) + '</td><td>' + esc(n.kind) + '</td><td>' + esc(n.meal || 'All') + '</td><td class="wrap">' + esc(n.label || '–') + '</td><td><button class="btn danger small" type="button" data-cx="' + n.id + '">Remove</button></td></tr>';
+  }).join('') : '<tr><td colspan="5" class="muted">No calendar notes yet.</td></tr>';
+}
+async function addNote(e) {
+  e.preventDefault();
+  if (!$('cxDate').value) { flash('cxMsg', 'Choose a date.', 'err'); return; }
+  var r = await api('POST', '/api/context', { date: $('cxDate').value, kind: $('cxKind').value, meal: $('cxMeal').value || null, label: $('cxLabel').value });
+  if (r.status === 201) { flash('cxMsg', 'Note added. It appears as context on forecasts for that date.', 'ok'); $('cxLabel').value = ''; loadNotes(); if (fcShown) runForecast(null); }
+  else flash('cxMsg', apiErr(r, 'Could not add the note.'), r.status === 409 ? 'warn' : 'err');
+}
+async function noteClick(e) {
+  var b = e.target.closest('button[data-cx]');
+  if (!b) return;
+  var r = await api('DELETE', '/api/context/' + b.getAttribute('data-cx'));
+  if (r.ok) { loadNotes(); if (fcShown) runForecast(null); } else flash('cxMsg', apiErr(r), 'err');
+}
+
+/* ----- surplus (server-backed) ----- */
+var STATUS_TXT = { pending_review: ['warn', 'Awaiting safety review'], available: ['ok', 'Available (safety confirmed by a person)'], reserved: ['info', 'Reserved (not confirmed accepted)'], collected: ['info', 'Collected (recorded by staff)'], withdrawn: ['err', 'Withdrawn'] };
+var STORE_TXT = { hot_held: 'Kept hot', refrigerated: 'Refrigerated', room_temp: 'Room temp.', frozen: 'Frozen', unknown: 'Not recorded' };
+async function loadSurplus() {
+  if (!serverUp) { $('sBody').innerHTML = '<tr><td colspan="9" class="muted">The EcoPlate server is not connected.</td></tr>'; return; }
+  var r = await api('GET', '/api/surplus');
+  if (!r.ok || !r.data) { $('sBody').innerHTML = '<tr><td colspan="9" class="muted">' + esc(apiErr(r, 'Could not load the register.')) + '</td></tr>'; return; }
+  serverSurplus = { items: r.data.items, recs: r.data.recommendations, recipients: r.data.recipients, counts: r.data.counts, avail: r.data.available_portions, loaded: true };
+  renderSurplus();
+  $('sSurplus').textContent = num(serverSurplus.avail);
+}
+function renderSurplus() {
+  var S = serverSurplus, active = S.recipients.filter(function (x) { return x.active; });
+  $('sBody').innerHTML = S.items.length ? S.items.map(function (s) {
+    var st = STATUS_TXT[s.status] || ['info', s.status], acts = '', open = s.status === 'pending_review' || s.status === 'available';
+    var miss = s.missing_information.filter(function (m) { return m !== 'preparation time'; });
+    var warn = s.expired ? ' <span class="tag err">past safe-until time</span>' : (open && miss.length ? ' <span class="tag warn">missing: ' + esc(miss.join(', ')) + '</span>' : '');
+    if (s.status === 'pending_review') acts += '<button class="btn sec small" type="button" data-act="confirm" data-id="' + s.id + '">Confirm safety…</button> ';
+    if (s.status === 'available') acts += '<select aria-label="Recipient for ' + esc(s.item) + '" data-rsel="' + s.id + '"><option value="">Recipient…</option>' + active.map(function (x) { return '<option value="' + x.id + '">' + esc(x.name) + '</option>'; }).join('') + '</select> <button class="btn sec small" type="button" data-act="reserve" data-id="' + s.id + '">Reserve</button> ';
+    if (s.status === 'available' || s.status === 'reserved') acts += '<button class="btn sec small" type="button" data-act="collect" data-id="' + s.id + '">Mark collected</button> ';
+    if (s.status === 'reserved') acts += '<button class="btn sec small" type="button" data-act="release" data-id="' + s.id + '">Release</button> ';
+    if (open || s.status === 'reserved') acts += '<button class="btn danger small" type="button" data-act="withdraw" data-id="' + s.id + '">Withdraw</button> ';
+    acts += '<button class="btn sec small" type="button" data-act="log" data-id="' + s.id + '">History</button>';
+    return '<tr><td class="wrap">' + esc(s.item) + (s.legacy ? ' <span class="syn">old register</span>' : '') + '</td><td>' + esc(s.portions) + '</td><td>' + esc(s.meal || '–') + '</td><td class="wrap">' + esc(s.location || '–') + '</td><td>' + esc(s.use_by_time || '–') + '</td><td>' + esc(STORE_TXT[s.storage] || s.storage) + '</td><td>' + esc(s.service_date) + '</td><td class="wrap"><span class="tag ' + st[0] + '">' + esc(st[1]) + '</span>' + warn + (s.safety_confirmed_by ? '<br><span class="muted">Confirmed by: ' + esc(s.safety_confirmed_by) + '</span>' : '') + '</td><td class="wrap">' + acts + '</td></tr>';
+  }).join('') : '<tr><td colspan="9" class="muted">No surplus food registered yet.</td></tr>';
+  $('sRecs').innerHTML = S.recs.length ? S.recs.map(function (x) {
+    var cls = x.readiness === 'ready_for_human_review' ? 'info' : x.readiness === 'expired' ? 'err' : 'warn';
+    var h = '<div class="msg ' + cls + '"><b>#' + x.id + ' ' + esc(x.item) + '</b>: ' + esc(x.message);
+    if (x.recipients_matching_stated_range.length) h += '<br>Recipients whose stated portion range fits: ' + x.recipients_matching_stated_range.map(function (r) { return esc(r.name) + (r.requirements ? ' (' + esc(r.requirements) + ')' : ''); }).join(', ') + '.<br><i>' + esc(x.recipient_note) + '</i>';
+    return h + '</div>';
+  }).join('') : '<p class="muted">Nothing is waiting for review.</p>';
+  $('rcBody').innerHTML = S.recipients.length ? S.recipients.map(function (r) {
+    return '<tr><td class="wrap">' + esc(r.name) + (r.active ? '' : ' <span class="tag err">inactive</span>') + '</td><td class="wrap">' + esc(r.contact || '–') + '</td><td class="wrap">' + esc(r.requirements || '–') + '</td><td>' + esc((r.min_portions || 1) + ' to ' + (r.max_portions || 'any')) + '</td><td>' + (r.active ? '<button class="btn danger small" type="button" data-rc="' + r.id + '">Deactivate</button>' : '') + '</td></tr>';
+  }).join('') : '<tr><td colspan="5" class="muted">No recipients recorded. EcoPlate does not suggest any until you add them.</td></tr>';
+}
+async function addSurplus(e, pendingMode) {
+  if (e && e.preventDefault) e.preventDefault();
+  var item = $('sItem').value.trim(), q = $('sQty').value.trim();
+  if (!item) return flash('sMsg', 'Please enter the food item.', 'err');
+  if (!/^\d+$/.test(q) || parseInt(q, 10) < 1 || parseInt(q, 10) > 10000) return flash('sMsg', 'Portions must be a whole number from 1 to 10,000.', 'err');
+  if (!pendingMode && !$('sSafe').checked) return flash('sMsg', 'Please confirm that the food is safe to share, or use "Register for safety review" if it has not been checked yet.', 'err');
+  if (needServer('sMsg')) return;
+  var body = { item: item, portions: parseInt(q, 10), meal: $('sMeal').value || null, storage: $('sStorage').value, prepared_time: $('sPrep').value || null,
+               use_by_time: $('sUntil').value || null, location: $('sLoc').value.trim(), safety_confirmed: !pendingMode && $('sSafe').checked };
+  var r = await api('POST', '/api/surplus', body);
+  if (r.status === 409 && r.data && r.data.code === 'possible_duplicate') {
+    if (!confirm(r.data.error + '\n\nRegister it again as a separate batch?')) { flash('sMsg', 'Not added: it looks like a duplicate.', 'warn'); return; }
+    body.confirm_duplicate = true;
+    r = await api('POST', '/api/surplus', body);
+  }
+  if (r.status === 201) {
+    flash('sMsg', body.safety_confirmed ? 'Added. Marked available because you confirmed the food is safe.' : 'Added as awaiting safety review. A person must confirm it before it can be offered.', 'ok');
+    ['sItem', 'sQty', 'sLoc', 'sUntil', 'sPrep'].forEach(function (id) { $(id).value = ''; });
+    $('sSafe').checked = false; $('sMeal').value = ''; $('sStorage').value = 'unknown';
+    await loadSurplus(); loadAttention();
+  } else flash('sMsg', apiErr(r, 'Could not add the entry.'), 'err');
+}
+async function surplusClick(e) {
+  var b = e.target.closest('button[data-act]');
+  if (!b) return;
+  var id = parseInt(b.getAttribute('data-id'), 10), act = b.getAttribute('data-act'), body, r;
+  var entry = serverSurplus.items.filter(function (x) { return x.id === id; })[0];
+  if (!entry) { flash('sMsg', 'That entry no longer exists. The list has been refreshed.', 'warn'); loadSurplus(); return; }
+  if (act === 'log') {
+    r = await api('GET', '/api/surplus/' + id + '/events');
+    if (!r.ok) { flash('sMsg', apiErr(r), 'err'); return; }
+    flash('sMsg', 'History of "' + entry.item + '": ' + r.data.events.map(function (x) { return x.at.replace('T', ' ').slice(0, 16) + ' ' + x.action.replace('_', ' ') + ' by ' + x.actor + (x.note ? ' (' + x.note + ')' : ''); }).join(' → '), 'info');
+    return;
+  }
+  if (act === 'confirm') {
+    if (!confirm('Confirm that YOU have checked "' + entry.item + '": it was freshly served, has been stored properly and is safe to eat?\n\nEcoPlate cannot judge this. Your role and the time are recorded.')) return;
+    body = { action: 'confirm_safety', attest: true };
+  } else if (act === 'reserve') {
+    var sel = document.querySelector('select[data-rsel="' + id + '"]');
+    if (!sel || !sel.value) { flash('sMsg', 'Choose a recorded recipient first (add one below if needed).', 'warn'); return; }
+    body = { action: 'reserve', recipient_id: parseInt(sel.value, 10) };
+  } else if (act === 'collect') {
+    if (!confirm('Record "' + entry.item + '" as collected? EcoPlate cannot verify this; it only records what you tell it.')) return;
+    body = { action: 'collect' };
+  } else if (act === 'release') body = { action: 'release' };
+  else if (act === 'withdraw') {
+    var why = prompt('Withdraw "' + entry.item + '" from the register. Optional reason (for example spilled, expired, not needed):', '');
+    if (why === null) return;
+    body = { action: 'withdraw', note: why };
+  } else return;
+  r = await api('POST', '/api/surplus/' + id + '/action', body);
+  if (r.status === 422 && r.data && /override/i.test(r.data.error || '') && body.action === 'reserve') {
+    if (confirm(r.data.error + '\n\nContinue anyway because the recipient agreed?')) { body.override = true; r = await api('POST', '/api/surplus/' + id + '/action', body); }
+  }
+  if (r.ok) flash('sMsg', r.data.message + (r.data.warnings && r.data.warnings.length ? ' ' + r.data.warnings.join(' ') : ''), 'ok');
+  else flash('sMsg', apiErr(r, 'Could not change the entry.'), r.status === 409 ? 'warn' : 'err');
+  await loadSurplus(); loadAttention();
+}
+async function addRecipient(e) {
+  e.preventDefault();
+  var name = $('rcName').value.trim();
+  if (!name) return flash('rcMsg', 'Please enter the recipient name.', 'err');
+  function n(id) { var v = $(id).value.trim(); return v === '' ? null : parseInt(v, 10); }
+  var r = await api('POST', '/api/recipients', { name: name, contact: $('rcContact').value, requirements: $('rcReq').value, min_portions: n('rcMin'), max_portions: n('rcMax') });
+  if (r.status === 201) { flash('rcMsg', 'Recipient recorded.', 'ok'); ['rcName', 'rcContact', 'rcReq', 'rcMin', 'rcMax'].forEach(function (id) { $(id).value = ''; }); loadSurplus(); }
+  else flash('rcMsg', apiErr(r, 'Could not add the recipient.'), r.status === 409 ? 'warn' : 'err');
+}
+async function recipientClick(e) {
+  var b = e.target.closest('button[data-rc]');
+  if (!b || !confirm('Deactivate this recipient? Past records keep the name.')) return;
+  var r = await api('DELETE', '/api/recipients/' + b.getAttribute('data-rc'));
+  if (r.ok) loadSurplus(); else flash('rcMsg', apiErr(r), 'err');
+}
+function surplusForBackup() {
+  if (!serverSurplus.loaded) return state.surplus;
+  return serverSurplus.items.filter(function (s) { return s.status !== 'withdrawn'; }).map(function (s) {
+    return { id: 'srv' + s.id, item: s.item, portions: s.portions, location: s.location, safeUntil: s.use_by_time || '', created: s.service_date, status: s.status === 'collected' ? 'Collected' : 'Available' };
+  });
+}
+async function importSurplusEntries(entries) {
+  if (!entries || !entries.length) return null;
+  var r = await api('POST', '/api/surplus/import', { entries: entries });
+  if (!r.ok) notice('Surplus entries could not be copied to the server: ' + apiErr(r), 'err');
+  await loadSurplus();
+  return r;
+}
+/* One-time, additive copy of the old browser-only surplus register to the server. The browser copy is kept. */
+async function migrateSurplusToServer() {
+  if (state.surplusMigrated || !state.surplus.length) return;
+  var r = await api('POST', '/api/surplus/import', { entries: state.surplus });
+  if (!r.ok || !r.data) { notice('Your old surplus register could not be copied to the server yet (' + apiErr(r) + '). It is still safe in this browser; reload to try again.', 'warn'); return; }
+  state.surplusMigrated = { at: new Date().toISOString(), added: r.data.added, skipped: r.data.skipped_already_imported, invalid: r.data.invalid.length };
+  save();
+  notice('Your old surplus register was copied to the server: ' + r.data.added + ' entr' + (r.data.added === 1 ? 'y' : 'ies') + ' added' + (r.data.invalid.length ? ', ' + r.data.invalid.length + ' could not be read' : '') + '. The browser copy was kept as a safety copy. Entries copied from the old register have no storage condition recorded, so they cannot be offered to a recipient until you add it.', r.data.invalid.length ? 'warn' : 'ok');
+}
+
 /* ---------- tabs and setup ---------- */
 function showTab(t) {
   document.querySelectorAll('.panel').forEach(function (p) { p.classList.toggle('active', p.id === 'tab-' + t); });
@@ -1373,6 +1803,12 @@ function showTab(t) {
   if (t === 'data') renderData();
   if (t === 'dashboard') renderDashboard();
   if (t === 'model') loadModelPanel(false);
+  if (t === 'dashboard') loadAttention();
+  if (t === 'insights' && insStale) loadInsights();
+  if (t === 'alerts' && alStale) loadAlerts();
+  if (t === 'forecast') loadNotes();
+  if (t === 'surplus') loadSurplus();
+  if (t === 'assistant') loadAssistantMode();
   window.scrollTo(0, 0);
 }
 function init() {
@@ -1416,9 +1852,25 @@ function init() {
   $('btnRetrain').addEventListener('click', function () { loadModelPanel(true); });
   $('mgFile').addEventListener('change', function () { mergeFile(this.files[0]); });
   $('dashModel').addEventListener('click', function (e) { var b = e.target.closest('button[data-goto]'); if (b) showTab(b.getAttribute('data-goto')); });
+  $('dashAttention').addEventListener('click', function (e) { var b = e.target.closest('button[data-goto]'); if (b) showTab(b.getAttribute('data-goto')); });
   window.addEventListener('storage', function (e) {
     if (e.key === KEY) notice('EcoPlate data was changed in another browser tab. Please refresh this page (F5) before making changes.', 'warn');
   });
+  $('loginForm').addEventListener('submit', doLogin);
+  $('btnLogout').addEventListener('click', doLogout);
+  $('btnInsRefresh').addEventListener('click', loadInsights);
+  $('insNoSyn').addEventListener('change', loadInsights);
+  $('alShowDone').addEventListener('change', renderAlerts);
+  $('alNoSyn').addEventListener('change', loadAlerts);
+  $('alBody').addEventListener('click', alertClick);
+  $('asForm').addEventListener('submit', function (e) { e.preventDefault(); askAssistant($('asQ').value); });
+  $('asChips').addEventListener('click', function (e) { var b = e.target.closest('.asEx'); if (b) { $('asQ').value = b.textContent; askAssistant(b.textContent); } });
+  $('sPending').addEventListener('click', function () { addSurplus(null, true); });
+  $('cxForm').addEventListener('submit', addNote);
+  $('cxBody').addEventListener('click', noteClick);
+  $('rcForm').addEventListener('submit', addRecipient);
+  $('rcBody').addEventListener('click', recipientClick);
+  $('cxDate').value = todayISO();
   bootstrap();
 }
 /* Connects to the server, copies any old browser records into it (once, additive), then loads the records. */
@@ -1443,7 +1895,13 @@ async function bootstrap() {
     return;
   }
   serverInfo = h.data; serverUp = true;
+  auth.enabled = !!h.data.auth_enabled;
+  $('btnLogout').style.display = auth.enabled ? '' : 'none';
+  if (h.data.login_required) { showLogin(); return; }
+  $('loginCard').style.display = 'none';
+  (h.data.warnings || []).forEach(function (w) { if (/ACCESS_CODE is not set/.test(w)) notice('No access code is set on this server, so anyone who can open this site can read, change and delete data. Set ECOPLATE_ACCESS_CODE before using real canteen records.', 'warn'); });
   await migrateLocalRecords();
+  await migrateSurplusToServer();
   await refreshRecords();
   renderAll();
 }

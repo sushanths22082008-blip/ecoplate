@@ -4,6 +4,8 @@
 * Stores meal records in a local SQLite file (ecoplate.db) with a UNIQUE(date, meal) rule.
 * Trains / evaluates / forecasts through the supplied ecoplate_ml module (HistGradientBoostingRegressor).
 
+Also (upgrade): insights, anomaly review, surplus workflow, AI assistant, optional access code. See README.
+
 Run:  python app.py        then open the address it prints (default http://127.0.0.1:5000)
 """
 from __future__ import annotations
@@ -21,7 +23,13 @@ from datetime import date, datetime, timedelta, timezone
 
 from flask import Flask, g, jsonify, request, send_from_directory
 
+import ecoplate_assistant as assistant
+import ecoplate_db as migrations
+import ecoplate_insights as insights
 import ecoplate_ml as ml
+import ecoplate_routes
+from ecoplate_security import (RateLimiter, load_settings, require, validate_settings, current_role)
+from ecoplate_util import local_today
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_DB = os.environ.get("ECOPLATE_DB") or os.path.join(BASE_DIR, "ecoplate.db")
@@ -32,6 +40,7 @@ DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 SOURCE_RE = re.compile(r"^[A-Za-z_]{1,20}$")
 BATCH_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
 REPLACE_TOKEN = "REPLACE_ALL_RECORDS"
+_WARNED = set()
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meal_records (
@@ -77,7 +86,7 @@ def parse_iso_date(s):
 
 def validate_record(obj, today=None, defaults=None):
     """Return (record_dict, errors). Strict: dates are YYYY-MM-DD, never in the future."""
-    today = today or date.today()
+    today = today or local_today()
     defaults = defaults or {}
     errs = []
     if not isinstance(obj, dict):
@@ -150,6 +159,20 @@ def create_app(db_path=None):
     app.json.sort_keys = False
     app.extensions["model_store"] = ml.ModelStore()
 
+    # ---- configuration (validated once; secrets come from environment variables only) ----
+    settings = load_settings()
+    fatal, warnings_ = validate_settings(settings)
+    if fatal:
+        raise RuntimeError("EcoPlate configuration error: " + " ".join(fatal))
+    for w in warnings_:
+        if w not in _WARNED:                # log each configuration warning once per process
+            _WARNED.add(w)
+            logging.getLogger("ecoplate").warning(w)
+    app.extensions["ecoplate_settings"] = settings
+    app.extensions["config_warnings"] = warnings_
+    app.extensions["rate_limiter"] = RateLimiter()
+    app.extensions["llm_budget"] = assistant.DailyBudget(settings.llm_daily_limit, local_today)
+
     # ---- database ----
     def connect():
         con = sqlite3.connect(app.config["DB_PATH"], isolation_level=None, timeout=15)
@@ -163,6 +186,8 @@ def create_app(db_path=None):
             init_con.execute("PRAGMA journal_mode=WAL")
         except sqlite3.DatabaseError:       # pragma: no cover
             pass
+        # additive, versioned migration; copies the database aside first if it already holds records
+        app.extensions["migration"] = migrations.migrate(init_con, app.config["DB_PATH"])
     finally:
         init_con.close()
 
@@ -184,16 +209,40 @@ def create_app(db_path=None):
         rows = db().execute("SELECT date, meal, prepared, leftovers, synthetic FROM meal_records").fetchall()
         raw = [{"date": r["date"], "meal": r["meal"], "prepared": r["prepared"],
                 "leftovers": r["leftovers"], "synthetic": bool(r["synthetic"])} for r in rows]
-        return app.extensions["model_store"].get(raw, force=force)
+        return app.extensions["model_store"].get(raw, today=local_today(), force=force)
+
+    def load_records():
+        """Validated records (dates as date objects) for insights, anomalies and the assistant."""
+        rows = db().execute("SELECT date, meal, prepared, leftovers, synthetic FROM meal_records").fetchall()
+        raw = [{"date": r["date"], "meal": r["meal"], "prepared": r["prepared"], "leftovers": r["leftovers"],
+                "synthetic": bool(r["synthetic"])} for r in rows]
+        return ml.clean_records(raw, local_today())[0]
 
     def json_body():
         data = request.get_json(silent=True)
         return data if isinstance(data, dict) else None
 
     # ---- headers ----
+    @app.before_request
+    def csrf_guard():
+        """When logins are enabled, state-changing API calls must carry a custom header. A web page on another
+        site cannot add it (the browser would first ask permission, which EcoPlate never grants), so forged
+        cross-site requests are rejected even if the browser attaches the login cookie."""
+        if (app.extensions["ecoplate_settings"].auth_enabled and request.path.startswith("/api/")
+                and request.method not in ("GET", "HEAD", "OPTIONS") and request.path != "/api/auth/login"
+                and request.headers.get("X-Requested-With") != "EcoPlate"):
+            return err("Missing request header.", 403, code="csrf")
+
     @app.after_request
     def no_cache(resp):
         resp.headers["Cache-Control"] = "no-store"
+        resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+        resp.headers.setdefault("X-Frame-Options", "DENY")
+        resp.headers.setdefault("Referrer-Policy", "no-referrer")
+        resp.headers.setdefault("Content-Security-Policy",
+                                "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+                                "img-src 'self' data:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; "
+                                "base-uri 'none'; form-action 'self'")
         return resp
 
     # ---- frontend ----
@@ -210,20 +259,32 @@ def create_app(db_path=None):
     def health():
         import numpy
         import sklearn
-        return jsonify({"ok": True, "app": "EcoPlate", "records": count_records(),
-                        "database": os.path.basename(app.config["DB_PATH"]),
-                        "model": "HistGradientBoostingRegressor", "model_version": ml.MODEL_VERSION,
-                        "versions": {"python": platform.python_version(), "scikit_learn": sklearn.__version__,
-                                     "numpy": numpy.__version__}})
+        st = app.extensions["ecoplate_settings"]
+        authed = current_role(st) is not None
+        out = {"ok": True, "app": "EcoPlate", "database": os.path.basename(app.config["DB_PATH"]),
+               "model": "HistGradientBoostingRegressor", "model_version": ml.MODEL_VERSION,
+               "schema_version": migrations.SCHEMA_VERSION, "auth_enabled": st.auth_enabled,
+               "login_required": st.auth_enabled and not authed,
+               "ai_assistant": "ai_wording" if st.llm_configured and st.llm_daily_limit > 0 else "data_only",
+               "versions": {"python": platform.python_version(), "scikit_learn": sklearn.__version__,
+                            "numpy": numpy.__version__}}
+        if authed:                              # counts and warnings are only shown to logged-in users
+            out["records"] = count_records()
+            out["warnings"] = app.extensions["config_warnings"]
+            out["storage_note"] = ("On hosts with an ephemeral disk (for example Render's free plan) the database file is "
+                                   "erased on every redeploy or restart. Use a persistent disk or take regular backups.")
+        return jsonify(out)
 
     # ---- records ----
     @app.get("/api/records")
+    @require("staff")
     def list_records():
         rows = db().execute("SELECT * FROM meal_records ORDER BY date, "
                             "CASE meal WHEN 'Breakfast' THEN 0 WHEN 'Lunch' THEN 1 ELSE 2 END").fetchall()
         return jsonify({"ok": True, "count": len(rows), "records": [row_to_api(r) for r in rows]})
 
     @app.post("/api/records")
+    @require("staff")
     def add_record():
         body = json_body()
         if body is None:
@@ -248,6 +309,7 @@ def create_app(db_path=None):
         return jsonify({"ok": True, "record": {**rec, "synthetic": bool(rec["synthetic"])}, "records": count_records()}), 201
 
     @app.post("/api/records/bulk")
+    @require("staff")
     def bulk_records():
         """Add many records. Invalid rows and duplicates are skipped and reported; existing rows are NEVER
         overwritten. dry_run=true validates and reports without saving."""
@@ -302,6 +364,7 @@ def create_app(db_path=None):
             "records": count_records()}))
 
     @app.delete("/api/records")
+    @require("admin")
     def delete_record():
         d, meal = request.args.get("date", ""), request.args.get("meal", "")
         if parse_iso_date(d) is None or meal not in ml.MEALS:
@@ -312,6 +375,7 @@ def create_app(db_path=None):
         return jsonify({"ok": True, "deleted": cur.rowcount, "records": count_records()})
 
     @app.delete("/api/records/batch/<batch>")
+    @require("admin")
     def delete_batch(batch):
         if not BATCH_RE.match(batch):
             return err("Invalid batch id")
@@ -319,11 +383,13 @@ def create_app(db_path=None):
         return jsonify({"ok": True, "deleted": cur.rowcount, "records": count_records()})
 
     @app.delete("/api/records/synthetic")
+    @require("admin")
     def delete_synthetic():
         cur = db().execute("DELETE FROM meal_records WHERE synthetic=1")
         return jsonify({"ok": True, "deleted": cur.rowcount, "records": count_records()})
 
     @app.post("/api/records/replace")
+    @require("admin")
     def replace_records():
         """Atomically replace ALL records (used by backup-restore and reset). All-or-nothing: if any record is
         invalid or duplicated, nothing changes. Requires confirm == 'REPLACE_ALL_RECORDS'."""
@@ -369,16 +435,19 @@ def create_app(db_path=None):
 
     # ---- model ----
     @app.get("/api/model/report")
+    @require("staff")
     def model_report():
         bundle, cached = model_bundle(force=request.args.get("force") == "1")
         return jsonify(json_safe({"ok": True, "cached": cached, "report": bundle["report"]}))
 
     @app.post("/api/model/train")
+    @require("staff")
     def model_train():
         bundle, cached = model_bundle(force=True)
         return jsonify(json_safe({"ok": True, "cached": cached, "report": bundle["report"]}))
 
     @app.post("/api/forecast")
+    @require("staff")
     def forecast():
         body = json_body()
         if body is None:
@@ -389,7 +458,7 @@ def create_app(db_path=None):
         target = parse_iso_date(body.get("date"))
         if target is None:
             return err("date must be a real calendar date written YYYY-MM-DD")
-        if target > date.today() + timedelta(days=MAX_FORECAST_DAYS_AHEAD):
+        if target > local_today() + timedelta(days=MAX_FORECAST_DAYS_AHEAD):
             return err(f"Forecast date is more than {MAX_FORECAST_DAYS_AHEAD} days ahead")
 
         def num(key, default, lo, hi, label):
@@ -420,7 +489,21 @@ def create_app(db_path=None):
             mode = "insufficient_data"
         res.update({"ok": True, "mode": mode, "ml_used": res["method"] == "ml_gradient_boosting",
                     "model_cached": cached, "meal": meal, "date": target.isoformat()})
+        # Calendar notes (holiday / exam / event) are shown as CONTEXT only; they never change the number.
+        ctx_rows = [dict(r) for r in db().execute("SELECT date, kind, meal, label FROM day_context WHERE date=? OR date<?",
+                                                  (target.isoformat(), target.isoformat()))]
+        res["calendar_context"] = insights.calendar_effects(bundle["records"], ctx_rows, meal, target)
+        # Save the forecast (future dates only) so insights can later compare it with what really happened.
+        if target > local_today():
+            db().execute("INSERT INTO forecast_log(target_date,meal,made_at,method,expected_demand,recommended,attendance_pct) "
+                         "VALUES(?,?,?,?,?,?,?) ON CONFLICT(target_date,meal) DO UPDATE SET made_at=excluded.made_at, "
+                         "method=excluded.method, expected_demand=excluded.expected_demand, "
+                         "recommended=excluded.recommended, attendance_pct=excluded.attendance_pct",
+                         (target.isoformat(), meal, datetime.now(timezone.utc).isoformat(timespec="seconds"), res["method"],
+                          float(res["expected_demand"]), int(res["recommended"]), float(att)))
         return jsonify(json_safe(res))
+
+    ecoplate_routes.register(app, db, load_records, model_bundle, err, json_body, json_safe)
 
     # ---- errors (always JSON under /api) ----
     @app.errorhandler(404)
@@ -506,4 +589,3 @@ if __name__ == "__main__":
         import webbrowser
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()
     application.run(host=host, port=port, debug=False, threaded=True)
-

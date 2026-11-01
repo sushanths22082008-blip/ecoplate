@@ -256,3 +256,65 @@ Do not set `ECOPLATE_HOST=0.0.0.0` unless you understand that the app has no log
 
 `index.html` frontend · `app.py` Flask server and API · `ecoplate_ml.py` model (supplied, unmodified) ·
 `requirements.txt` · `requirements-dev.txt` (optional browser test) · `tests/` · `ecoplate.db` is created on first run.
+
+---
+
+## 10. Upgrade (v2): AI-assisted insights, alerts, assistant and surplus management
+
+Everything in sections 1–9 still works. The upgrade adds the items below. **Implemented** means it exists in code and
+has automated tests (see section 7 / `docs/AUDIT.md`); nothing here is a mock-up.
+
+| Area | What it does | Where |
+|---|---|---|
+| Forecast safeguards (implemented) | Rolling-origin (expanding-window) check on top of the hold-out; per-meal "not trusted" gate; band only with ≥ 20 out-of-sample errors (finite-sample quantiles); shortage warnings; 0-leftover (food ran out) warning; explicit limitations; model-failure and NaN fallbacks; retraining policy stated | `ecoplate_ml.py`, Forecast and Model tabs |
+| Calendar notes (implemented) | Mark holidays/exams/events; shown as context with how earlier flagged days compared. **Never changes the number.** | Forecast tab |
+| Insights (implemented) | Trend (latest 5 vs previous 5 sessions), meal comparison, weekday pattern, saved-forecast-vs-actual, preparation review. Shows period, counts, thresholds; separates *Observed* / *Possible explanations* / *Suggested review*; says "not enough data" | `ecoplate_insights.py`, Insights tab |
+| Anomaly alerts (implemented) | Robust z-score vs the previous ≤ 28 sessions of the same meal (never uses future data); explains why and what it was compared with; review log (*looks fine / recorded in error / dismissed*); never edits records | Alerts tab |
+| Assistant (implemented) | Fixed read-only data retrieval → plain "data-only" answer (works with no key). Optional AI wording; its numbers must all appear in the data or the wording is discarded. Refuses to change data or judge food safety | `ecoplate_assistant.py`, Assistant tab |
+| Surplus (implemented) | Server-side register with statuses *awaiting review → available → reserved → collected / withdrawn*, audit trail, duplicate warning, human safety confirmation, recipients you enter, review suggestions that never say "safe" | `ecoplate_surplus.py`, Surplus tab |
+| Access control (implemented, opt-in) | Access code + optional admin code, CSRF header, rate-limited login, security headers | `ecoplate_security.py` |
+| Migrations (implemented) | Versioned additive schema, automatic pre-migration copy | `ecoplate_db.py` |
+
+**Proposed / not implemented:** Postgres migration; per-user accounts; editing a surplus entry after registration
+(withdraw and re-register instead); emailing recipients; using holidays/exams as model features (needs enough flagged
+history first); an ML anomaly detector (see `docs/AUDIT.md` for why not yet).
+
+### Behaviour changes to be aware of (and why)
+- **Surplus register moved from the browser to the database** so staff share one list with an audit trail. Old
+  browser entries are copied once, additively; the browser copy is kept. Entries copied this way have no storage
+  condition, so they cannot be *reserved* until re-registered (they can still be collected or withdrawn).
+- **Reset** no longer deletes surplus register entries (audit trail). **Restore** only *adds* surplus entries.
+- The **tick-box is still required** on *Add to register*. A second button, *Register for safety review*, saves food as
+  "awaiting review" for a person to confirm later.
+- The model must now win the rolling-origin check too, so it is used slightly less often than before; this is
+  deliberate (fewer false "ML is better" outcomes). Training takes about 0.3 s longer.
+- "Today" follows `ECOPLATE_TIMEZONE` (default Asia/Kolkata), not the server's UTC clock.
+
+### Setting it up on your own computer
+```
+pip install -r requirements.txt
+python app.py
+```
+Open the address it prints. Optional (PowerShell shown; use `export NAME=value` on macOS/Linux):
+```
+$env:ECOPLATE_ACCESS_CODE="a-long-code-here"
+$env:ECOPLATE_SECRET_KEY="a-long-random-string-of-32-or-more-characters"
+$env:ANTHROPIC_API_KEY="sk-ant-..."        # optional: AI wording
+$env:ECOPLATE_COOKIE_SECURE="0"            # only when using http://127.0.0.1
+python app.py
+```
+With no variables set EcoPlate runs open, exactly as before, and shows a yellow warning. Never put keys in
+`index.html`, in GitHub, or in chat messages.
+
+### Running every test
+```
+pip install -r requirements-dev.txt
+python -m unittest discover -s tests          # unit/API tests (no browser needed)
+playwright install chromium                    # once
+python tests/test_browser.py                   # original end-to-end checks
+python tests/test_browser_upgrade.py           # new-feature end-to-end checks (add --shots for screenshots)
+```
+
+### Putting the update on GitHub and Render
+See `docs/DEPLOYMENT.md` (environment variables, **database persistence on Render**, safe upgrade steps, rollback)
+and `docs/DEMO_PLAN.md` (judge presentation).
