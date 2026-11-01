@@ -12,3 +12,4 @@ instance/
 *.db-journal
 shots/
 .pytest_cache/
+*.sqlite-backup

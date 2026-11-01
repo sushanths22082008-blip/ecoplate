@@ -1,7 +1,8 @@
-"""EcoPlate backend (Flask + SQLite + scikit-learn).
+"""EcoPlate backend (Flask + SQLite or PostgreSQL + scikit-learn).
 
 * Serves the existing frontend (index.html) from the same origin, so there are no CORS problems.
-* Stores meal records in a local SQLite file (ecoplate.db) with a UNIQUE(date, meal) rule.
+* Stores records in a local SQLite file (ecoplate.db) by default, or in PostgreSQL (for example Neon) when the
+  DATABASE_URL environment variable is set. Both use a UNIQUE(date, meal) rule on meal records.
 * Trains / evaluates / forecasts through the supplied ecoplate_ml module (HistGradientBoostingRegressor).
 
 Also (upgrade): insights, anomaly review, surplus workflow, AI assistant, optional access code. See README.
@@ -25,8 +26,10 @@ from flask import Flask, g, jsonify, request, send_from_directory
 
 import ecoplate_assistant as assistant
 import ecoplate_db as migrations
+import ecoplate_dbapi as dbapi
 import ecoplate_insights as insights
 import ecoplate_ml as ml
+import ecoplate_postgres as pg_migrations
 import ecoplate_routes
 from ecoplate_security import (RateLimiter, load_settings, require, validate_settings, current_role)
 from ecoplate_util import local_today
@@ -41,6 +44,18 @@ SOURCE_RE = re.compile(r"^[A-Za-z_]{1,20}$")
 BATCH_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
 REPLACE_TOKEN = "REPLACE_ALL_RECORDS"
 _WARNED = set()
+
+
+def _load_local_env():
+    """Read a local `.env` file (if python-dotenv is installed and the file exists) into the environment.
+    Variables that are already set (for example on Render) are NEVER overridden. Nothing is printed.
+    This is called only when the server starts (python app.py / gunicorn), never inside create_app(),
+    so automated tests are not affected by a developer's private .env file."""
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return
+    load_dotenv(os.path.join(BASE_DIR, ".env"), override=False)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meal_records (
@@ -154,6 +169,11 @@ def row_to_api(r):
 # ----------------------------------------------------------------------------- app factory
 def create_app(db_path=None):
     app = Flask(__name__, static_folder=None)
+    # Backend choice: an explicit db_path (tests, tools) always means SQLite. Otherwise DATABASE_URL -> PostgreSQL,
+    # and with neither, the SQLite file as before. The URL is kept out of app.config so it cannot leak into logs.
+    database_url = (os.environ.get("DATABASE_URL") or "").strip()
+    backend = dbapi.POSTGRES if (db_path is None and database_url) else dbapi.SQLITE
+    app.config["DB_BACKEND"] = backend
     app.config["DB_PATH"] = db_path or DEFAULT_DB
     app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024
     app.json.sort_keys = False
@@ -175,19 +195,22 @@ def create_app(db_path=None):
 
     # ---- database ----
     def connect():
-        con = sqlite3.connect(app.config["DB_PATH"], isolation_level=None, timeout=15)
-        con.row_factory = sqlite3.Row
-        return con
+        if backend == dbapi.POSTGRES:
+            return dbapi.connect_postgres(database_url)
+        return dbapi.connect_sqlite(app.config["DB_PATH"])
 
     init_con = connect()
     try:
-        init_con.executescript(SCHEMA)
-        try:
-            init_con.execute("PRAGMA journal_mode=WAL")
-        except sqlite3.DatabaseError:       # pragma: no cover
-            pass
-        # additive, versioned migration; copies the database aside first if it already holds records
-        app.extensions["migration"] = migrations.migrate(init_con, app.config["DB_PATH"])
+        if backend == dbapi.POSTGRES:
+            app.extensions["migration"] = pg_migrations.migrate(init_con)
+        else:
+            init_con.raw.executescript(SCHEMA)
+            try:
+                init_con.execute("PRAGMA journal_mode=WAL")
+            except sqlite3.DatabaseError:       # pragma: no cover
+                pass
+            # additive, versioned migration; copies the database aside first if it already holds records
+            app.extensions["migration"] = migrations.migrate(init_con.raw, app.config["DB_PATH"])
     finally:
         init_con.close()
 
@@ -203,7 +226,7 @@ def create_app(db_path=None):
             con.close()
 
     def count_records():
-        return db().execute("SELECT COUNT(*) FROM meal_records").fetchone()[0]
+        return db().scalar("SELECT COUNT(*) FROM meal_records")
 
     def model_bundle(force=False):
         rows = db().execute("SELECT date, meal, prepared, leftovers, synthetic FROM meal_records").fetchall()
@@ -261,9 +284,12 @@ def create_app(db_path=None):
         import sklearn
         st = app.extensions["ecoplate_settings"]
         authed = current_role(st) is not None
-        out = {"ok": True, "app": "EcoPlate", "database": os.path.basename(app.config["DB_PATH"]),
+        pg = backend == dbapi.POSTGRES
+        out = {"ok": True, "app": "EcoPlate",
+               "database": "PostgreSQL" if pg else os.path.basename(app.config["DB_PATH"]),
+               "database_backend": backend,
                "model": "HistGradientBoostingRegressor", "model_version": ml.MODEL_VERSION,
-               "schema_version": migrations.SCHEMA_VERSION, "auth_enabled": st.auth_enabled,
+               "schema_version": pg_migrations.SCHEMA_VERSION if pg else migrations.SCHEMA_VERSION, "auth_enabled": st.auth_enabled,
                "login_required": st.auth_enabled and not authed,
                "ai_assistant": "ai_wording" if st.llm_configured and st.llm_daily_limit > 0 else "data_only",
                "versions": {"python": platform.python_version(), "scikit_learn": sklearn.__version__,
@@ -271,8 +297,12 @@ def create_app(db_path=None):
         if authed:                              # counts and warnings are only shown to logged-in users
             out["records"] = count_records()
             out["warnings"] = app.extensions["config_warnings"]
-            out["storage_note"] = ("On hosts with an ephemeral disk (for example Render's free plan) the database file is "
-                                   "erased on every redeploy or restart. Use a persistent disk or take regular backups.")
+            if pg:
+                out["storage_note"] = ("Records are stored in an external PostgreSQL database, so they survive redeploys "
+                                       "and restarts. Keep regular backups anyway.")
+            else:
+                out["storage_note"] = ("On hosts with an ephemeral disk (for example Render's free plan) the database file is "
+                                       "erased on every redeploy or restart. Use a persistent disk or take regular backups.")
         return jsonify(out)
 
     # ---- records ----
@@ -304,7 +334,7 @@ def create_app(db_path=None):
                         "VALUES(?,?,?,?,?,?,?,?)",
                         (rec["date"], rec["meal"], rec["prepared"], rec["leftovers"], rec["source"], rec["batch"],
                          rec["synthetic"], datetime.now(timezone.utc).isoformat(timespec="seconds")))
-        except sqlite3.IntegrityError:      # lost a race with a parallel request
+        except dbapi.INTEGRITY_ERRORS:      # lost a race with a parallel request
             return err("A record for that date and meal already exists. Nothing was changed.", 409)
         return jsonify({"ok": True, "record": {**rec, "synthetic": bool(rec["synthetic"])}, "records": count_records()}), 201
 
@@ -346,16 +376,16 @@ def create_app(db_path=None):
             to_add.append(rec)
         if to_add and not dry:
             now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-            con.execute("BEGIN IMMEDIATE")
+            con.begin()
             try:
                 con.executemany(
                     "INSERT INTO meal_records(date,meal,prepared,leftovers,source,batch,synthetic,created_at) "
                     "VALUES(?,?,?,?,?,?,?,?)",
                     [(r["date"], r["meal"], r["prepared"], r["leftovers"], r["source"], r["batch"],
                       r["synthetic"], now) for r in to_add])
-                con.execute("COMMIT")
+                con.commit()
             except Exception:
-                con.execute("ROLLBACK")
+                con.rollback()
                 raise
         return jsonify(json_safe({
             "ok": True, "dry_run": dry, "received": len(items), "added": 0 if dry else len(to_add),
@@ -419,7 +449,7 @@ def create_app(db_path=None):
         con = db()
         before = count_records()
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        con.execute("BEGIN IMMEDIATE")
+        con.begin()
         try:
             con.execute("DELETE FROM meal_records")
             con.executemany(
@@ -427,9 +457,9 @@ def create_app(db_path=None):
                 "VALUES(?,?,?,?,?,?,?,?)",
                 [(r["date"], r["meal"], r["prepared"], r["leftovers"], r["source"], r["batch"],
                   r["synthetic"], now) for r in recs])
-            con.execute("COMMIT")
+            con.commit()
         except Exception:
-            con.execute("ROLLBACK")
+            con.rollback()
             raise
         return jsonify({"ok": True, "removed": before, "stored": len(recs), "records": len(recs)})
 
@@ -546,6 +576,7 @@ class _LazyWsgiApp:
         if self._real is None:
             with self._lock:
                 if self._real is None:
+                    _load_local_env()
                     self._real = create_app()
         return self._real
 
@@ -574,6 +605,7 @@ if __name__ == "__main__":
     host = os.environ.get("ECOPLATE_HOST", "127.0.0.1")
     wanted = int(os.environ.get("ECOPLATE_PORT", "5000"))
     port = _free_port(host, wanted)
+    _load_local_env()
     application = create_app()
     url = f"http://{host}:{port}"
     print("\n" + "=" * 62)
@@ -581,7 +613,10 @@ if __name__ == "__main__":
     print(f"  Open this address in your browser:  {url}")
     if port != wanted:
         print(f"  (port {wanted} was busy, so {port} is being used)")
-    print(f"  Database file: {application.config['DB_PATH']}")
+    if application.config["DB_BACKEND"] == dbapi.POSTGRES:
+        print("  Database: PostgreSQL (from DATABASE_URL; the address is not shown)")
+    else:
+        print(f"  Database file: {application.config['DB_PATH']}")
     print("  Press Ctrl+C in this window to stop the server.")
     print("=" * 62 + "\n")
     if "--open" in sys.argv:

@@ -23,8 +23,9 @@ ENV = {"ECOPLATE_COOKIE_SECURE": "0"}
 
 
 def make_app(env=None, db=None):
+    # DATABASE_URL is removed so these tests can never reach a real PostgreSQL (e.g. your Neon database).
     keys = ["ECOPLATE_ACCESS_CODE", "ECOPLATE_ADMIN_CODE", "ECOPLATE_SECRET_KEY", "ANTHROPIC_API_KEY",
-            "ECOPLATE_LLM_DAILY_LIMIT", "ECOPLATE_ASSISTANT_PER_MINUTE"]
+            "ECOPLATE_LLM_DAILY_LIMIT", "ECOPLATE_ASSISTANT_PER_MINUTE", "DATABASE_URL"]
     clean = {k: v for k, v in os.environ.items() if k not in keys}
     with mock.patch.dict(os.environ, {**clean, **ENV, **(env or {})}, clear=True):
         return appmod.create_app(db)

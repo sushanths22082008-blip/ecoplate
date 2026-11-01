@@ -7,12 +7,12 @@ from __future__ import annotations
 
 import logging
 import re
-import sqlite3
 from datetime import date, datetime
 
 from flask import current_app, jsonify, request
 
 import ecoplate_assistant as assistant
+import ecoplate_dbapi as dbapi
 import ecoplate_insights as insights
 import ecoplate_ml as ml
 import ecoplate_surplus as sp
@@ -168,12 +168,12 @@ def register(app, db, load_records, model_bundle, err, json_body, json_safe):
         label, e = sp.clean_text(body.get("label"), "Label", 80)
         if d is None or d.year < 2000 or kind not in CONTEXT_KINDS or (meal is not None and meal not in ml.MEALS) or e:
             return err(e or "Provide date (YYYY-MM-DD), kind (" + ", ".join(CONTEXT_KINDS) + "), optional meal and label")
-        if db().execute("SELECT COUNT(*) FROM day_context").fetchone()[0] >= MAX_CONTEXT_ROWS:
+        if db().scalar("SELECT COUNT(*) FROM day_context") >= MAX_CONTEXT_ROWS:
             return err("Too many calendar notes stored")
         try:
             db().execute("INSERT INTO day_context(date,kind,meal,label,created_at) VALUES(?,?,?,?,?)",
                          (d.isoformat(), kind, meal, label, local_now().isoformat(timespec="seconds")))
-        except sqlite3.IntegrityError:
+        except dbapi.INTEGRITY_ERRORS:
             return err("That calendar note already exists.", 409)
         return jsonify({"ok": True}), 201
 
@@ -188,7 +188,7 @@ def register(app, db, load_records, model_bundle, err, json_body, json_safe):
         return db().execute("SELECT * FROM surplus_items " + where, args).fetchall()
 
     def recipients_rows():
-        return db().execute("SELECT * FROM recipients ORDER BY active DESC, name").fetchall()
+        return db().execute("SELECT * FROM recipients ORDER BY active DESC, lower(name)").fetchall()
 
     def surplus_summary():
         now = local_now()
@@ -233,22 +233,21 @@ def register(app, db, load_records, model_bundle, err, json_body, json_safe):
                        existing=[{"id": d["id"], "portions": d["portions"], "status": d["status"]} for d in dups])
         stamp = now.isoformat(timespec="seconds")
         status = "available" if rec["safety_confirmed"] else "pending_review"
-        con.execute("BEGIN IMMEDIATE")
+        con.begin()
         try:
-            cur = con.execute(
+            sid = con.insert_id(
                 "INSERT INTO surplus_items(item,meal,portions,service_date,prepared_time,use_by_time,storage,location,status,"
                 "safety_confirmed_by,safety_confirmed_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (rec["item"], rec["meal"], rec["portions"], rec["service_date"], rec["prepared_time"], rec["use_by_time"],
                  rec["storage"], rec["location"], status,
                  f"{role_name()} (tick-box at registration)" if rec["safety_confirmed"] else None,
                  stamp if rec["safety_confirmed"] else None, stamp, stamp))
-            sid = cur.lastrowid
             log_event(con, sid, "registered", None, "pending_review")
             if rec["safety_confirmed"]:
                 log_event(con, sid, "confirm_safety", "pending_review", "available", "Confirmed by a person at registration")
-            con.execute("COMMIT")
+            con.commit()
         except Exception:
-            con.execute("ROLLBACK")
+            con.rollback()
             raise
         row = con.execute("SELECT * FROM surplus_items WHERE id=?", (sid,)).fetchone()
         return jsonify({"ok": True, "item": sp.item_view(row, now)}), 201
@@ -265,29 +264,30 @@ def register(app, db, load_records, model_bundle, err, json_body, json_safe):
             return err(e)
         now = local_now()
         con = db()
-        con.execute("BEGIN IMMEDIATE")
+        con.begin()
         try:
-            row = con.execute("SELECT * FROM surplus_items WHERE id=?", (sid,)).fetchone()
+            # FOR UPDATE (PostgreSQL) locks this row until COMMIT, so two people cannot change the same item at once.
+            row = con.execute("SELECT * FROM surplus_items WHERE id=?", (sid,), for_update=True).fetchone()
             if not row:
-                con.execute("ROLLBACK")
+                con.rollback()
                 return err("No such surplus item", 404)
             if action == "confirm_safety" and body.get("attest") is not True:
-                con.execute("ROLLBACK")
+                con.rollback()
                 return err("A person must tick the food-safety confirmation (attest: true). EcoPlate cannot decide this.", 422)
             recipient = None
             rid = body.get("recipient_id")
             if rid is not None:
                 if isinstance(rid, bool) or not isinstance(rid, int):
-                    con.execute("ROLLBACK")
+                    con.rollback()
                     return err("recipient_id must be a number")
                 recipient = con.execute("SELECT * FROM recipients WHERE id=? AND active=1", (rid,)).fetchone()
                 if recipient is None:
-                    con.execute("ROLLBACK")
+                    con.rollback()
                     return err("That recipient is not recorded (or is inactive).", 404)
             new, errs, warns = sp.check_transition(action, row, now, dict(recipient) if recipient else None,
                                                    override=body.get("override") is True)
             if errs:
-                con.execute("ROLLBACK")
+                con.rollback()
                 return err(" ".join(errs), 422, errors=errs)
             sets = {"status": new, "updated_at": now.isoformat(timespec="seconds")}
             if action == "confirm_safety":
@@ -301,15 +301,15 @@ def register(app, db, load_records, model_bundle, err, json_body, json_safe):
             cur = con.execute(f"UPDATE surplus_items SET {', '.join(k + '=?' for k in sets)} WHERE id=? AND status=?",
                               (*sets.values(), sid, row["status"]))
             if cur.rowcount != 1:
-                con.execute("ROLLBACK")
+                con.rollback()
                 return err("This item was changed by someone else. Refresh and try again.", 409)
             log_event(con, sid, action, row["status"], new,
                       (note + " " if note else "") + " ".join(warns) + (f" recipient={recipient['name']}" if recipient else ""))
-            con.execute("COMMIT")
+            con.commit()
         except Exception:
             try:
-                con.execute("ROLLBACK")
-            except sqlite3.OperationalError:
+                con.rollback()
+            except dbapi.OPERATIONAL_ERRORS:
                 pass
             raise
         row = con.execute("SELECT * FROM surplus_items WHERE id=?", (sid,)).fetchone()
@@ -374,18 +374,18 @@ def register(app, db, load_records, model_bundle, err, json_body, json_safe):
             ok_rows.append((item, int(p), sdate, ub, loc, status, lid))
         con = db()
         if ok_rows:
-            con.execute("BEGIN IMMEDIATE")
+            con.begin()
             try:
                 for (item, p, sd, ub, loc, status, lid) in ok_rows:
-                    cur = con.execute(
+                    new_id = con.insert_id(
                         "INSERT INTO surplus_items(item,portions,service_date,use_by_time,location,status,safety_confirmed_by,"
                         "safety_confirmed_at,legacy_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                         (item, p, sd, ub, loc, status, "old browser register (tick-box)", stamp, lid, stamp, stamp))
-                    log_event(con, cur.lastrowid, "imported", None, status, "Copied from the old browser-only register")
+                    log_event(con, new_id, "imported", None, status, "Copied from the old browser-only register")
                     added += 1
-                con.execute("COMMIT")
+                con.commit()
             except Exception:
-                con.execute("ROLLBACK")
+                con.rollback()
                 raise
         return jsonify({"ok": True, "added": added, "skipped_already_imported": skipped, "invalid": invalid})
 
@@ -400,7 +400,7 @@ def register(app, db, load_records, model_bundle, err, json_body, json_safe):
             db().execute("INSERT INTO recipients(name,contact,requirements,min_portions,max_portions,active,created_at) "
                          "VALUES(?,?,?,?,?,1,?)", (rec["name"], rec["contact"], rec["requirements"], rec["min_portions"],
                                                    rec["max_portions"], local_now().isoformat(timespec="seconds")))
-        except sqlite3.IntegrityError:
+        except dbapi.INTEGRITY_ERRORS:
             return err("A recipient with that name already exists.", 409)
         return jsonify({"ok": True}), 201
 
